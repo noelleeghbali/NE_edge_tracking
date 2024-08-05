@@ -1,4 +1,6 @@
-from imaging_analysis import pickle_obj
+# %%
+from imaging_analysis import *
+from behavior_analysis import *
 from analysis_funs.regression import fci_regmodel
 from analysis_funs.optogenetics import opto
 from analysis_funs.CX_imaging import CX
@@ -11,7 +13,7 @@ from scipy import signal as sg
 import sys
 import pickle
 
-datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON21/240508/F2/Trial3')
+datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON21/240802/F2/T2')
 d = datadir.split(os.path.sep)
 name = d[-3] + '_' + d[-2] + '_' + d[-1]
 # %% Registration
@@ -19,7 +21,7 @@ ex = im.fly(name, datadir)
 ex.register_all_images(overwrite=True)
 ex.z_projection()
 # %% Masks for ROI drawing
-ex.mask_slice = {'All': [1, 2, 3, 4, 5]}
+ex.mask_slice = {'All': [1, 2, 3, 4]}
 ex.t_projection_mask_slice()
 # %%
 cx = CX(name, ['mbon21'], datadir)
@@ -32,10 +34,10 @@ cx.crop = False
 cx.save_postprocessing()
 pv2, ft, ft2, ix = cx.load_postprocessing()
 img_dict = {'pv2': pv2, 'ft2': ft2}
-pickle_obj(img_dict, '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21', '240508_Fly2_T3.pkl')
+pickle_obj(img_dict, '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21/picklez', '240802_Fly2_T2.pkl')
 # %%
 fc = fci_regmodel(pv2[['0_mbon21']].to_numpy().flatten(), ft2, pv2)
-fc.rebaseline(span=500, plotfig=True)
+#fc.rebaseline(span=500, plotfig=True)
 # %%
 y = fc.ca
 plt.plot(y)
@@ -75,61 +77,85 @@ plt.ylabel('Coefficient weight')
 plt.xlabel('Regressor name')
 plt.show()
 # %% Summarise all
-savedir = "Y:\Data\FCI\Hedwig\\SS70711_FB4X\\SummaryFigures"
-datadirs = ["Y:\Data\FCI\Hedwig\\SS70711_FB4X\\240307\\f1\\Trial3",
-            "Y:\Data\FCI\Hedwig\\SS70711_FB4X\\240313\\f1\\Trial3"]
+filename = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21/240725_Fly1_T2.pkl'
+figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21'
+img_dict = open_pickle(filename)
 
-regchoice = ['odour onset', 'odour offset', 'in odour',
-             'cos heading pos', 'cos heading neg', 'sin heading pos', 'sin heading neg',
-             'angular velocity pos', 'angular velocity neg', 'x pos', 'x neg', 'y pos', 'y neg', 'ramp down since exit', 'ramp to entry']
-d_R2s = np.zeros((len(datadirs), len(regchoice)))
-coeffs = np.zeros((len(datadirs), len(regchoice)))
-rsq = np.zeros(len(datadirs))
-rsq_t_t = np.zeros((len(datadirs), 2))
-for i, d in enumerate(datadirs):
+pv2 = img_dict['pv2']
+ft2 = img_dict['ft2']
+ft2['instrip'] = ft2['instrip'].replace({1: True, 0: False})
+ft2['mbon21'] = pv2['0_mbon21']
+ft2['relative_time'] = pv2['relative_time']
+print(ft2)
 
-    dspl = d.split("\\")
-    name = dspl[-3] + '_' + dspl[-2] + '_' + dspl[-1]
-    cx = CX(name, ['fsbTN'], d)
-    pv2, ft, ft2, ix = cx.load_postprocessing()
-    fc = fci_regmodel(pv2[['0_fsbtn']].to_numpy().flatten(), ft2, pv2)
-    fc.rebaseline(span=500, plotfig=True)
-    fc.run(regchoice, partition='pre_air')
-    fc.run_dR2(20, fc.xft)
-    d_R2s[i, :] = fc.dR2_mean
-    coeffs[i, :] = fc.coeff_cv[:-1]
-    rsq[i] = fc.r2
-    rsq_t_t[i, 0] = fc.r2_part_train
-    rsq_t_t[i, 1] = fc.r2_part_test
+FF = ft2['mbon21']
+time = ft2['relative_time']
 
+fig, axs = plt.subplots(1, 1, figsize=(15, 5))
+axs.plot(time, FF, color='black', linewidth=1)
+#axs.plot(time, ft2['net_motion'], color='blue', linewidth=1)
 
-fc.plot_mean_flur('odour_onset')
-fc.plot_example_flur()
-plt.figure()
-plt.plot(d_R2s.T, color='k')
-plt.plot([0, len(regchoice)], [0, 0], color='k', linestyle='--')
-plt.xticks(np.arange(0, len(regchoice)), labels=regchoice, rotation=90)
-plt.subplots_adjust(bottom=0.4)
-plt.ylabel('delta R2')
-plt.xlabel('Regressor name')
+d, di, do = inside_outside(ft2)
+for key, df in di.items():
+    time_on = df['relative_time'].iloc[0]
+    time_off = df['relative_time'].iloc[-1]
+    timestamp = time_off - time_on
+    rectangle = patches.Rectangle((time_on, FF.min()), timestamp, FF.max() + 0.5, facecolor='#ff7f24', alpha=0.3)
+    axs.add_patch(rectangle)
+
+# # Set title with fly number
+#title = f'fly {fly_number}'
+#plt.suptitle(title)
+plt.xlim(1600, 1700)
+plt.xlabel('Time')
 plt.show()
-plt.savefig(os.path.join(savedir, 'dR2.png'))
 
+savename='odor_FF.pdf'
+#fig.savefig(os.path.join(figure_folder, savename))
+# %%
+filename = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21/240725_Fly1_T2.pkl'
+img_dict = open_pickle(filename)
+pv2 = img_dict['pv2']
+ft2 = img_dict['ft2']
+ft2['instrip'] = ft2['instrip'].replace({1: True, 0: False})
+ft2['FF'] = pv2['0_mbon21']
+ft2['relative_time'] = pv2['relative_time']
+fig, axs = plt.subplots(1, 1, figsize=(6, 6))
+first_on_index = ft2[ft2['instrip']].index[0]
+exp_df = ft2.loc[first_on_index:] # This filters the dataframe
+xo = exp_df.iloc[0]['ft_posx']
+yo = exp_df.iloc[0]['ft_posy']
+# Assign FF (fluorescence) to the correct df column
+FF = exp_df['FF']
+smoothed_FF = FF.rolling(window=10, min_periods=1).mean()
+cmap = plt.get_cmap('coolwarm')
 
-plt.figure()
-plt.plot(coeffs.T, color='k')
-plt.plot([0, len(regchoice)], [0, 0], color='k', linestyle='--')
-plt.xticks(np.arange(0, len(regchoice)), labels=regchoice, rotation=90)
-plt.subplots_adjust(bottom=0.4)
-plt.ylabel('Coefficient weight')
-plt.xlabel('Regressor name')
-plt.show()
-plt.savefig(os.path.join(savedir, 'Coeffs.png'))
+# Normalize FF to [0, 1] for colormap
+min_FF = smoothed_FF.min()
+max_FF = smoothed_FF.max()
+range_FF = max_FF - min_FF
+norm = colors_mod.Normalize(vmin=min_FF - 0.1 * range_FF, vmax=max_FF + 0.1 * range_FF)
 
-plt.figure()
-plt.scatter(rsq_t_t[:, 0], rsq_t_t[:, 1], color='k')
-plt.plot([np.min(rsq_t_t[:]), np.max(rsq_t_t[:])], [
-         np.min(rsq_t_t[:]), np.max(rsq_t_t[:])], color='k', linestyle='--')
-plt.xlabel('R2 pre air')
-plt.ylabel('R2 live air')
-plt.title('Model trained on pre air period')
+# Plot the trajectory on the corresponding subplot
+axs.scatter(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, c=smoothed_FF, cmap=cmap, norm=norm, s=1)
+axs.add_patch(patches.Rectangle((-10 / 2, 0), 10, 1000, facecolor='lightgrey', edgecolor='lightgrey', alpha=0.3))
+# Set axes, labels, and title
+axs.set_xlim(-250,250)
+axs.set_ylim(0, 500)
+axs.set_xlabel('x position', fontsize=14)
+axs.set_ylabel('y position', fontsize=14)
+#axs.set_title(f'{title} {lobe} lobe', fontsize=14)
+
+# Further customization
+axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
+for pos in ['right', 'top']:
+    axs.spines[pos].set_visible(False)
+
+for _, spine in axs.spines.items():
+    spine.set_linewidth(2)
+for spine in axs.spines.values():
+    spine.set_edgecolor('black')
+
+# Apply tight layout to the entire figure
+fig.tight_layout()
+# %%
