@@ -14,7 +14,7 @@ import seaborn as sns
 
 def open_log(logfile):  # Generate a dataframe from the contents of a log file.
     df = pd.read_table(logfile, delimiter='[,]', engine='python')
-    new = df["timestamp -- motor_step_command"].str.split("--", n = 1, expand = True)
+    new = df["timestamp -- motor_step_command"].str.split("--", n=1, expand=True)
     df["timestamp"]= new[0]
     df["motor_step_command"]=new[1]
     df.drop(columns=["timestamp -- motor_step_command"], inplace=True)
@@ -43,9 +43,8 @@ def open_log(logfile):  # Generate a dataframe from the contents of a log file.
         angvel = np.abs(df.df_yaw)*effective_rate
     speed = np.sqrt(xv**2+yv**2)
     df['abs_angvel'] = angvel
-    return df
-   
-
+    netmotion = np.sqrt(df.ft_roll**2+df.ft_pitch**2+df.ft_yaw**2)*effective_rate
+    df['net_motion'] = netmotion
     return df
 
 def light_on_off(df):  # For an experiment dataframe, split the trajectory into light on and light off bouts.
@@ -67,6 +66,13 @@ def calculate_trav_dir(df):
     y = df.ft_posy
     dir = np.arctan2(np.gradient(y), np.gradient(x))
     df['trav_dir'] = dir
+    return df
+
+def calculate_net_motion(df):
+    del_t = np.mean(np.diff(df.seconds))
+    effective_rate = 1/del_t
+    netmotion = np.sqrt(df.ft_roll**2+df.ft_pitch**2+df.ft_yaw**2) * effective_rate
+    df['net_motion'] = netmotion
     return df
 
 def circmean_heading(df, means_list):
@@ -93,9 +99,9 @@ def get_last_second(df):
 def inside_outside(df):
     di = {}
     do = {}
-    d = dict([*df.groupby(df['odor_on'].ne(df['odor_on'].shift()).cumsum())])
+    d = dict([*df.groupby(df['instrip'].ne(df['instrip'].shift()).cumsum())])
     for bout in d:
-        if d[bout].odor_on.any():
+        if d[bout].instrip.any():
             di[bout]=d[bout]
         else:
             do[bout]=d[bout]
@@ -107,6 +113,7 @@ def return_to_edge(df):
         return True
     else:
         return False
+
 def light_on_off(df):
     d_on = dict()
     d_off = dict()
@@ -137,13 +144,11 @@ def average_trajectory_in(dict, pts=5000):
     excludes first and last trajectories, excludes trajectories that don't
     return to the edge. flips trajectories to align all inside and outside.
     """
-
     if len(dict)<3:
         avg_x, avg_y=[],[]
     else:
         numel = len(dict)-2
         avg = np.zeros((numel, pts, 2))
-
         for i, key in enumerate(list(dict.keys())[1:-2]):
             df = dict[key]
             if len(df)>10:
@@ -169,13 +174,11 @@ def average_trajectory_out(dict, pts=5000):
     excludes first and last trajectories, excludes trajectories that don't
     return to the edge. flips trajectories to align all inside and outside.
     """
-
     if len(dict)<3:
         avg_x, avg_y=[],[]
     else:
         numel = len(dict)-2
         avg = np.zeros((numel, pts, 2))
-
         for i, key in enumerate(list(dict.keys())[1:-2]):
             df = dict[key]
             if len(df)>10:
@@ -238,10 +241,29 @@ def exp_parameters(folder_path):  # Create variables for visualization
                 xo = exp_df.iloc[0]['ft_posx']
                 yo = exp_df.iloc[0]['ft_posy']
                 # Append the results for the current file to the list
-                params_list.append([figure_folder, filename, df_odor, df_light, exp_df, xo, yo, plume_color])
+                params_list.append([figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color])
 
     return params_list
 
+def configure_bw_plot(size=(4,6), kde=False):
+    fig, axs = plt.subplots(1, 1, figsize=size)
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = 'Arial'
+    fig.patch.set_facecolor('black')  # Set background to black
+    axs.set_facecolor('black')  # Set background of plotting area to black
+    plt.rcParams['text.color'] = 'white'
+    plt.rcParams['axes.labelcolor'] = 'white'
+    plt.rcParams['xtick.color'] = 'white'
+    plt.rcParams['ytick.color'] = 'white'
+    plt.gca().spines['top'].set_visible(False)
+    plt.gca().spines['right'].set_visible(False)
+    plt.gca().spines['bottom'].set_visible(kde)
+    axs.spines['bottom'].set_color('white')
+    axs.spines['left'].set_color('white')
+    plt.yticks(fontsize=14, color='white')
+
+    plt.gca().spines['left'].set_linewidth(2)
+    return fig, axs
 
 def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim, ylim, led, hlines=[], select_file=None, plot_type='odor', save=False):
     params_list = exp_parameters(folder_path)
@@ -251,19 +273,15 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
         ledc = '#ff355e'
     elif led == 'green':
         ledc = '#0bdf51'
-
     for this_experiment in params_list:
-        figure_folder, filename, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
-
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
         # If a file is specified and the current file is not the specified one, skip to the next iteration
         if select_file and filename != select_file:
             continue
-
         # Create a figure and set the font to Arial
         fig, axs = plt.subplots(1, 1, figsize=(10, 10))
         plt.rcParams['font.family'] = 'sans-serif'
         plt.rcParams['font.sans-serif'] = 'Arial'
-
         # In an odor plume, plot the trajectory when the animal is in the odor
         if plot_type == 'odor':
             plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air')
@@ -271,18 +289,15 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
             plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on')
             plt.gca().add_patch(patches.Rectangle((-strip_width / 2, plume_start), strip_width, strip_length, facecolor=plume_color, alpha=0.5))
             savename = filename + '_odor_trajectory.pdf'
-
         # In a light plume, plot the trajectroy when the animal is in the light
         elif plot_type == 'odorless':
             plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='lightgrey', label='base trajectory')
             plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on')
             plt.gca().add_patch(patches.Rectangle((-strip_width / 2, plume_start), strip_width, strip_length, facecolor=plume_color, edgecolor='lightgrey'))
             savename = filename + '_strip_trajectory.pdf'
-
         if hlines is not None:
             for i in (1, len(hlines)):
                 plt.hlines(y=hlines[i - 1], xmin=-100, xmax=100, colors='k', linestyles='--', linewidth=1)
-
         # Set axes, labels, and title
         plt.xlim(xlim)
         plt.ylim(ylim)
@@ -290,19 +305,16 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
         plt.title(filename, fontsize=14)
         axs.set_xlabel('x-position (mm)', fontsize=14)
         axs.set_ylabel('y-position (mm)', fontsize=14)
-
         # Further customization
         axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
         for pos in ['right', 'top']:
             axs.spines[pos].set_visible(False)
         plt.tight_layout()
         sns.despine(offset=10)
-
         for _, spine in axs.spines.items():
             spine.set_linewidth(2)
         for spine in axs.spines.values():
             spine.set_edgecolor('black')
-        
         # Save and show the plot
         if save:
             plt.savefig(os.path.join(figure_folder, savename))
@@ -319,27 +331,11 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
         ledc = '#0bda51'
 
     for this_experiment in params_list:
-        figure_folder, filename, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
-
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
         # If a file is specified and the current file is not the specified one, skip to the next iteration
         if select_file and filename != select_file:
             continue
-
-        # Create a figure and set the font to Arial
-        fig, axs = plt.subplots(1, 1, figsize=(10, 10))
-        plt.rcParams['font.family'] = 'sans-serif'
-        plt.rcParams['font.sans-serif'] = 'Arial'
-        fig.patch.set_facecolor('black')  # Set background to black
-        axs.set_facecolor('black')  # Set background of plotting area to black
-
-        
-        # Set font color to white
-        plt.rcParams['text.color'] = 'white'
-        plt.rcParams['axes.labelcolor'] = 'white'
-        plt.rcParams['xtick.color'] = 'white'
-        plt.rcParams['ytick.color'] = 'white'
-
-
+        fig, axs = configure_bw_plot(size=(10,10))
         # In an odor plume, plot the trajectory when the animal is in the odor
         if plot_type == 'odor':
             plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air')
@@ -347,18 +343,15 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
             plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on')
             plt.gca().add_patch(patches.Rectangle((-strip_width / 2, plume_start), strip_width, strip_length, facecolor=plume_color, alpha=0.3))
             savename = filename + '_odor_trajectory_bw.pdf'
-
         # In a light plume, plot the trajectroy when the animal is in the light
         elif plot_type == 'odorless':
             plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='base trajectory')
             plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on')
             plt.gca().add_patch(patches.Rectangle((-strip_width / 2, plume_start), strip_width, strip_length, facecolor='black', edgecolor='lightgrey'))
             savename = filename + '_strip_trajectory_bw.pdf'
-
         if hlines is not None:
             for i in (1, len(hlines)):
                 plt.hlines(y=hlines[i - 1], xmin=-100, xmax=100, colors='white', linestyles='--', linewidth=1)
-
         # Set axes, labels, and title
         plt.xlim(xlim)
         plt.ylim(ylim)
@@ -366,24 +359,135 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
         plt.title(filename, fontsize=14)
         axs.set_xlabel('x-position (mm)', fontsize=14)
         axs.set_ylabel('y-position (mm)', fontsize=14)
-
         # Further customization
         axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
         for pos in ['right', 'top']:
             axs.spines[pos].set_visible(False)
         plt.tight_layout()
         sns.despine(offset=10)
-
         for _, spine in axs.spines.items():
             spine.set_linewidth(2)
         for spine in axs.spines.values():
             spine.set_edgecolor('black')
-        
         # Save and show the plot
         if save:
             plt.savefig(os.path.join(figure_folder, savename))
         else:
             plt.show()
+
+def return_efficiency(folder_path, savename, size=(3,5), groups=2, keywords = ['Dop1R1', 'Dop1R2'], colors=['#c1ffc1', '#6f00ff']):
+    fig, axs = configure_bw_plot(size=size, kde=False)
+    returns = {f'returns_r{i+1}': [] for i in range(groups)}
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        d, d_in, d_out = inside_outside(exp_df)
+        pl = get_a_bout_calc(exp_df, 'path_length') / 1000
+        counts = {f'returns{i+1}': 0 for i in range(groups)}
+        for i in range(groups):
+            if keywords[i] in filename:
+                for key, df in d_out.items():
+                    if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge(df):
+                        counts[f'returns{i+1}'] += 1
+                returns[f'returns_r{i+1}'].append(counts[f'returns{i+1}'] / pl)
+    averages = [sum(returns[f'returns_r{i+1}']) / len(returns[f'returns_r{i+1}']) if returns[f'returns_r{i+1}'] else 0 for i in range(groups)]
+    noise = 0.05
+    x_values = [np.random.normal(i+1, noise, size=len(returns[f'returns_r{i+1}'])) for i in range(groups)]
+    for i in range(groups):
+        plt.scatter(x_values[i], returns[f'returns_r{i+1}'], color=colors[i % len(colors)], alpha=0.5)
+    plt.plot(range(1, groups+1), averages, color='white')
+    # for i in range(groups):
+    #     plt.scatter(i+1, averages[i], color='none', edgecolor='white', marker='o', linewidth=2, s=100)
+    plt.ylabel('returns per meter', fontsize=18, color='white')
+    plt.yticks(fontsize=14, color='white')
+    axs.set_xticks(range(1, groups+1))
+    axs.set_xticklabels(keywords, fontsize=16, color='white', rotation=45)
+    plt.xlim(0.5, groups + 0.5)
+    plt.tight_layout()
+    plt.show()
+    fig.savefig(savename, bbox_inches='tight')
+
+def block_return_efficiency(folder_path, savename, size=(3,5), cutoff=500, labels = ['LED off', 'LED on'], colors=['#c1ffc1', '#6f00ff']):
+    # Right now hard coded for only 2 blocks
+    fig, axs = configure_bw_plot(size=size, kde=False)
+    params_list = exp_parameters(folder_path)
+    rpm_b1 = []
+    rpm_b2 = []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        ypos = exp_df['ft_posy'] - yo
+        b1_df = exp_df[(ypos >= 0) & (ypos < cutoff)]
+        b2_df = exp_df[(ypos >= cutoff) & (ypos < 1000)]
+        d1, d_in1, d_out1 = inside_outside(b1_df)
+        d2, d_in2, d_out2 = inside_outside(b1_df)
+        pl1 = get_a_bout_calc(b1_df, 'path_length') / 1000
+        pl2 = get_a_bout_calc(b2_df, 'path_length') / 1000
+        returns_b1 = 0
+        returns_b2 = 0
+        for key, df in d_out1.items():
+            if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge(df):
+                    returns_b1+=1
+        rpm_b1.append(returns_b1 / pl1)
+        for key, df in d_out2.items():
+            if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge(df):
+                    returns_b2+=1
+        rpm_b2.append(returns_b2 / pl2)   
+    b1_avg = sum(rpm_b1) / len(rpm_b1)
+    b2_avg = sum(rpm_b2) / len(rpm_b2)  
+    noise = 0.05
+    x_b1=np.random.normal(1, noise, size=len(rpm_b1))
+    x_b2=np.random.normal(2, noise, size=len(rpm_b2))
+    plt.scatter(x_b1, rpm_b1, color=colors[0], alpha=0.5)
+    plt.scatter(x_b2, rpm_b2, color=colors[1], alpha=0.5)
+    plt.plot([1,2],[b1_avg, b2_avg], color='white')
+    plt.ylabel('returns per meter', fontsize=18, color='white')
+    axs.set_xticks((1,2))
+    axs.set_xticklabels(labels, fontsize=16, color='white', rotation=45)
+    plt.xlim(0.5, 2.5)
+    plt.tight_layout()
+    
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}', bbox_inches='tight')
+
+def block_xpos_distribution(folder_path, savename, size=(6,5), cutoff=500, labels = ['LED off', 'LED on'], colors=['#c1ffc1', '#6f00ff']):
+    # Right now hard coded for only 2 blocks
+    fig, axs = configure_bw_plot(size=size, kde=True)
+    params_list = exp_parameters(folder_path)
+    xpos_dist_b1 = []
+    xpos_dist_b2 = []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        ypos = exp_df['ft_posy'] - yo
+        b1_df = exp_df[(ypos >= 0) & (ypos < cutoff)]
+        b2_df = exp_df[(ypos >= cutoff) & (ypos < 1000)]
+        xpos_b1 = np.abs(b1_df['ft_posx'] - xo)
+        xpos_b2 = np.abs(b2_df['ft_posx'] - xo)
+        xpos_dist_b1.append(xpos_b1)
+        xpos_dist_b2.append(xpos_b2)
+    compiled_b1 = pd.concat(xpos_dist_b1, axis=0, ignore_index=True)
+    compiled_b2 = pd.concat(xpos_dist_b2, axis=0, ignore_index=True)      
+    sns.kdeplot(compiled_b1, label=labels[0], color=colors[0], fill=False, cut=0)
+    sns.kdeplot(compiled_b2, label=labels[1], color=colors[1], fill=False, cut=0) 
+    min_x, max_x = min(compiled_b1.min(), compiled_b2.min()), max(compiled_b1.max(), compiled_b2.max())
+    axs.set_xlim([0, max_x])
+    plt.axvline(x=25, color='lightgrey')
+    plt.xlabel('x-position (mm)', fontsize=18, color='white')
+    plt.ylabel('density', fontsize=18, color='white')
+    axs.spines['bottom'].set_linewidth(2)
+    axs.spines['left'].set_linewidth(2)
+    axs.spines['bottom'].set_color('white')
+    axs.spines['left'].set_color('white')
+    plt.xticks([0, 25, max_x], fontsize=14, color='white')
+    plt.yticks([0, 0.03], fontsize=14, color='white')
+    plt.legend()
+    plt.show()
+    print(compiled_b1.head(), compiled_b1.min())
+    print(compiled_b2.head(), compiled_b2.min())    
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}', bbox_inches='tight')
 
 def get_a_bout_calc(df, data_type):
     def path_length(x, y):
@@ -424,7 +528,6 @@ def store_bout_data(strip_dict, data_type, strip_status='in', hist=True):
 
 
 def create_bout_df(folder, data_type, plot_type):
-
     # Create a dataframe for every logfile in the folder
     for filename in os.listdir(folder):
         if filename.endswith('.log'):
@@ -436,7 +539,6 @@ def create_bout_df(folder, data_type, plot_type):
                 d_total, d_in, d_out = light_on_off(df)
             elif plot_type == 'odor':
                 d_total, d_in, d_out = odor_on_off(df)
-
             # This is just based on the nature of the experiment. Basically remove the first
             # 'out' key because that's the recorded baseline. Remove the last 'out' key
             # to eliminate "exits". Remove the first 'in' key because the animal has
@@ -444,11 +546,9 @@ def create_bout_df(folder, data_type, plot_type):
             d_out.pop(list(d_out.keys())[-1], None)  # Remove last key
             d_out.pop(list(d_out.keys())[0], None)  # Remove first key
             d_in.pop(2, None)  # Remove first key
-
             # Assign lists generated by store_bout_data
             in_data = store_bout_data(d_in, data_type, 'in', hist=True)
             out_data = store_bout_data(d_out, data_type, 'out', hist=True)
-
     data = {
         'data': in_data + out_data,
         'condition': ['in'] * len(in_data) + ['out'] * len(out_data)
@@ -458,51 +558,40 @@ def create_bout_df(folder, data_type, plot_type):
 
 def plot_histograms(folder_path, boutdf, plot_variable, group_variable, group_values, group_colors, title, x_label, y_label, x_limits=None):
     figure_folder = f'{folder_path}/figure'
-
     # Create a figure and add a subplot
     fig = plt.figure(figsize=(10, 5))
     ax = fig.add_subplot(1, 1, 1)
-
     offset = 0.5  # Offset the histograms so that values at 0 do not overlap
     # Assign the number of bins based on the range of the data
     vmin, vmax = boutdf[plot_variable].min(), boutdf[plot_variable].max()
     nbins = int(vmax - vmin)
-
     # Plotting histograms for each group
     # Iterate through the conditions
     for color, condition in zip(group_colors, group_values):
         df = boutdf[boutdf[group_variable] == condition]
         if df.empty:
             continue  # Skip if no data for this condition
-
         hist_vals = df[plot_variable].values
-
         # Apply an offset
         if condition == 'out':
             hist_vals += offset
-
         # Apply a negative offset
         elif condition == 'in':
             hist_vals -= offset
-
         bins = np.linspace(vmin, vmax, nbins)
-
         # Use the adjusted values for plotting
         ax.hist(hist_vals, bins, facecolor=color, edgecolor='none', rwidth=0.95)
-
     # Customize the plot
     ax.set_xlabel(x_label, fontsize=16)
     ax.set_ylabel(y_label, fontsize=16)
     ax.set_title(title, fontsize=18)
     if x_limits:
         ax.set_xlim(x_limits)
-
     # Further customization
     plt.rcParams['font.sans-serif'] = 'Arial'
     plt.rcParams['font.family'] = 'sans-serif'
     sns.set_theme(style='whitegrid')
     ax.tick_params(which='both', axis='both', labelsize=16, length=3, width=2, color='black', direction='out', left=True, bottom=True)
-
     for pos in ['right', 'top']:
         ax.spines[pos].set_visible(False)
     sns.despine(offset=10)
@@ -510,9 +599,7 @@ def plot_histograms(folder_path, boutdf, plot_variable, group_variable, group_va
         spine.set_linewidth(2)
     for spine in ax.spines.values():
         spine.set_edgecolor('black')
-
     plt.tight_layout()
-
     # Save the plot
     if not os.path.exists(figure_folder):
         os.makedirs(figure_folder)
@@ -526,7 +613,6 @@ def plot_scatter(folder_path, boutdf, plot_variable, group_variable, group_value
     sns.stripplot(data=boutdf, x=plot_variable, ax=ax1,
                       y=group_variable, edgecolor='none', dodge=False,
                       alpha=0.5, palette=group_colors, linewidth=0)
-
     ax1.grid(False)
     ax1.set_xlabel(x_label)
     ax1.set_ylabel(y_label)

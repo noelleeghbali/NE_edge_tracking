@@ -56,10 +56,10 @@ for folder in folders:
                 if len(y_out) > 0:
                     data[key]['y_out'].append(np.array(y_out))
 
-                if len(x_out) > 0 and len(y_out) > 0:
-                    axs.plot(x_out, y_out, color=data[key]['color'], alpha=0.2, linewidth=0.5)
-                if len(x_in) > 0 and len(y_in) > 0:
-                    axs.plot(x_in, y_in, color=data[key]['color'], alpha=0.2, linewidth=0.5)
+                #if len(x_out) > 0 and len(y_out) > 0:
+                    #axs.plot(x_out, y_out, color=data[key]['color'], alpha=0.2, linewidth=0.5)
+                #if len(x_in) > 0 and len(y_in) > 0:
+                    #axs.plot(x_in, y_in, color=data[key]['color'], alpha=0.2, linewidth=0.5)
 
 # Calculate and plot the averages
 for key in ['ctrl', 'led']:  # Plot ctrl first, then led
@@ -93,7 +93,7 @@ plt.vlines(x=0, ymin=-19, ymax=19, colors='k', linestyles=(0, (5, 10)), linewidt
 plt.show()
 
 savename = 'EPG_inhibition_inside_avg_trajs.pdf'
-fig.savefig(os.path.join(figure_folder, savename))
+#fig.savefig(os.path.join(figure_folder, savename))
 
 # %% Returns per meter (inhibition outside)
 fig, axs = plt.subplots(figsize=(3,5))
@@ -111,11 +111,11 @@ for folder in folders:
             df = open_log(logfile)
             df_odor=df[df['odor_on']]
             first_on_index = df_odor.index[0]  
-            post_df = df.loc[first_on_index:]
-            xo = post_df.iloc[0]['ft_posx']
-            yo = post_df.iloc[0]['ft_posy']
+            df = df.loc[first_on_index:]
+            xo = df.iloc[0]['ft_posx']
+            yo = df.iloc[0]['ft_posy']
             ypos = df['ft_posy'] - yo
-            df[(ypos >= 0) & (ypos < 500)]
+            #df[(ypos >= 0) & (ypos < 500)]
             b1_df = df[(ypos >= 0) & (ypos < 500)]
             b2_df = df[ypos>=500]
             d1, d_in1, d_out1 = inside_outside(b1_df)
@@ -155,7 +155,6 @@ axs.set_xticks([1,2])
 axs.set_xticklabels(['ctrl', 'led on'], fontsize=16, color='white')
 plt.xlim(0.5, 2.5)
 plt.tight_layout()
-
 plt.show()
 savename='EPG_inhibition_outside_returns_per_meter.pdf'
 fig.savefig(os.path.join(figure_folder, savename))
@@ -164,7 +163,6 @@ fig.savefig(os.path.join(figure_folder, savename))
 fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
 b1_means = []
 b2_means = []
-
 for folder in folders:
     for filename in os.listdir(folder):
         if filename.endswith('.log'):
@@ -173,9 +171,9 @@ for folder in folders:
             df = calculate_trav_dir(df)
             df_odor = df[df['odor_on']]
             first_on_index = df_odor.index[0]
-            post_df = df.loc[first_on_index:]
-            xo = post_df.iloc[0]['ft_posx']
-            yo = post_df.iloc[0]['ft_posy']
+            df = df.loc[first_on_index:]
+            xo = df.iloc[0]['ft_posx']
+            yo = df.iloc[0]['ft_posy']
             ypos = df['ft_posy'] - yo
             b1_df = df[(ypos >= 0) & (ypos < 500)]
             b2_df = df[ypos >= 500]
@@ -183,7 +181,7 @@ for folder in folders:
             d2, d_in2, d_out2 = inside_outside(b2_df)
             fly_b1_means = []
             fly_b2_means = []
-            for key, df in d_in1.items():
+            for key, df in d_out1.items():
                 if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 1:
                     df = get_last_second(df)
                     b1_circmean = circmean_heading(df, fly_b1_means)
@@ -191,7 +189,7 @@ for folder in folders:
                     b1_means.append((b1_x, b1_y))
                 fly_b1_mean = stats.circmean(fly_b1_means, low=-np.pi, high=np.pi, axis=None, nan_policy='omit')
                 plt.polar([0, fly_b1_mean], [0, 1], color='black', alpha=0.3, solid_capstyle='round')
-            for key, df in d_in2.items():
+            for key, df in d_out2.items():
                 if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 1: 
                     df = get_last_second(df)
                     b2_circmean = circmean_heading(df, fly_b2_means)
@@ -199,11 +197,9 @@ for folder in folders:
                     b2_means.append((b2_x, b2_y))
                 fly_b2_mean = stats.circmean(fly_b2_means, low=-np.pi, high=np.pi, axis=None, nan_policy='omit')
                 plt.polar([0, fly_b2_mean], [0, 1], color='#0bdf51', alpha=0.3, solid_capstyle='round')
-
 # Convert Cartesian coordinates to arrays for easier manipulation
 b1_means = np.array(b1_means)
 b2_means = np.array(b2_means)
-
 # Check if arrays are empty before computing summary vectors
 if b1_means.size > 0:
     summary_b1_vector = np.mean(b1_means, axis=0)
@@ -213,12 +209,11 @@ if b2_means.size > 0:
     summary_b2_vector = np.mean(b2_means, axis=0)
     summary_b2_rho, summary_b2_phi = cart2pol(summary_b2_vector[0], summary_b2_vector[1])
     plt.polar([0, summary_b2_phi], [0, summary_b2_rho], color='#0bdf51', alpha=1, linewidth=3, label='led on', solid_capstyle='round')
-
 ax.grid(False)
 ax.set_yticklabels([])
 ax.set_theta_zero_location('N')
-plt.title('exit angles')
+plt.title('entry angles')
 plt.show()
-savename = 'exit_angle_EPG_inhibition_inside.pdf'
+savename = 'entry_angle_EPG_inhibition_inside.pdf'
 fig.savefig(os.path.join(figure_folder, savename))
 # %%

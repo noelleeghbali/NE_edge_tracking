@@ -1,4 +1,6 @@
-from imaging_analysis import pickle_obj
+# %%
+from imaging_analysis import pickle_obj, open_pickle
+from behavior_analysis import *
 from analysis_funs.regression import fci_regmodel
 from analysis_funs.optogenetics import opto
 from analysis_funs.CX_imaging import CX
@@ -11,7 +13,7 @@ from scipy import signal as sg
 import sys
 import pickle
 
-datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON09/240515/F1/Trial1')
+datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON09/240726/F2/T1')
 d = datadir.split(os.path.sep)
 name = d[-3] + '_' + d[-2] + '_' + d[-1]
 # %% Registration
@@ -19,7 +21,7 @@ ex = im.fly(name, datadir)
 ex.register_all_images(overwrite=True)
 ex.z_projection()
 # %% Masks for ROI drawing
-ex.mask_slice = {'All': [1, 2, 3, 4]}
+ex.mask_slice = {'All': [1, 2, 3, 4, 5]}
 ex.t_projection_mask_slice()
 # %%
 cx = CX(name, ['mbon09'], datadir)
@@ -32,13 +34,13 @@ cx.crop = False
 cx.save_postprocessing()
 pv2, ft, ft2, ix = cx.load_postprocessing()
 img_dict = {'pv2': pv2, 'ft2': ft2}
-pickle_obj(img_dict, '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON09/240515', '240515_Fly1_T1.pkl')
+#pickle_obj(img_dict, '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON09', '240726_Fly2_T1.pkl')
 # %%
 fc = fci_regmodel(pv2[['0_mbon09']].to_numpy().flatten(), ft2, pv2)
-fc.rebaseline(span=400, plotfig=True)
+fc.rebaseline(span=600, plotfig=True)
 # %%
-y = fc.ca
-plt.plot(ft2['instrip'], color='grey')
+y = pv2['0_mbon09']
+plt.plot(ft2['instrip'].to_numpy(), color='grey')
 plt.plot(y)
 
 
@@ -46,10 +48,11 @@ fc = fci_regmodel(y, ft2, pv2)
 fc.example_trajectory(cmin=0, cmax=0.5)
 
 
+
 # %%
 
 fc = fci_regmodel(pv2[['0_mbon09']].to_numpy().flatten(), ft2, pv2)
-fc.rebaseline(span=400, plotfig=True)
+#fc.rebaseline(span=400, plotfig=True)
 regchoice = ['odour onset', 'odour offset', 'in odour',
              'cos heading pos', 'cos heading neg', 'sin heading pos', 'sin heading neg',
                                 'angular velocity pos', 'angular velocity neg', 'x pos', 'x neg', 'y pos', 'y neg', 'ramp down since exit', 'ramp to entry']
@@ -135,4 +138,41 @@ plt.xlabel('R2 pre air')
 plt.ylabel('R2 live air')
 plt.title('Model trained on pre air period')
 
+
+# %% Summarise all
+filename = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON09/240726_Fly2_T1.pkl'
+figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON09'
+img_dict = open_pickle(filename)
+
+pv2 = img_dict['pv2']
+ft2 = img_dict['ft2']
+ft2['instrip'] = ft2['instrip'].replace({1: True, 0: False})
+ft2['mbon09'] = pv2['0_mbon09']
+ft2['relative_time'] = pv2['relative_time']
+print(ft2)
+
+FF = ft2['mbon09']
+time = ft2['relative_time']
+
+fig, axs = plt.subplots(1, 1, figsize=(15, 5))
+axs.plot(time, FF, color='black', linewidth=1)
+#axs.plot(time, ft2['net_motion'], color='blue', linewidth=1)
+
+d, di, do = inside_outside(ft2)
+for key, df in di.items():
+    time_on = df['relative_time'].iloc[0]
+    time_off = df['relative_time'].iloc[-1]
+    timestamp = time_off - time_on
+    rectangle = patches.Rectangle((time_on, FF.min()), timestamp, FF.max() + 0.5, facecolor='#ff7f24', alpha=0.3)
+    axs.add_patch(rectangle)
+
+# # Set title with fly number
+#title = f'fly {fly_number}'
+#plt.suptitle(title)
+plt.xlim(100, 400)
+plt.xlabel('Time')
+plt.show()
+
+savename='odor_FF.pdf'
+#fig.savefig(os.path.join(figure_folder, savename))
 # %%

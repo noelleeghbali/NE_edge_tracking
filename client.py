@@ -1,11 +1,21 @@
-from behavior_analysis import trajectory_plotter, trajectory_plotter_bw, create_bout_df, plot_histograms, plot_scatter
+from behavior_analysis import *
 from imaging_analysis import plot_FF_trajectory, plot_speed_trajectory, plot_triggered_norm_FF
 
 # Plot a trajectory
-folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2024_exp/MAIN/EPG_GtACR'
-select_file = '07022024-144551_KCs_Dop1R1shRNA_acv_plume_Fly8.log'
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2024_exp/allen/KCs_Dop1R1_shRNA'
+select_file = '08022024-113325_MBON21_GtACR_light_crisscross_oct_short_Fly1.log'
 
-trajectory_plotter(folder_path, 50, 4000, -1000, [-500, 500], [0,1000], led='green', hlines=[500], select_file=None, plot_type='odor', save=True)
+trajectory_plotter(folder_path, 50, 100000, -1000, [-500, 500], [-500,500], led='none', hlines=None, select_file=None, plot_type='odor', save=True)
+
+
+
+
+
+
+
+
+
+
 #trajectory_plotter_bw(folder_path, 50, 2000, 0, [-500, 500], [1000, 2000], led='green', hlines=None, select_file=None, plot_type='odor', save=True)
 
 #distance_df = create_bout_df(folder_path, data_type='x_distance_from_plume', plot_type='odor')

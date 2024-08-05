@@ -247,3 +247,9 @@ plt.legend()
 plt.show()
 #fig.savefig(os.path.join(figure_folder, 'uw_speed_entry_R1vR2.pdf'))
 # %%
+return_efficiency(folder, savename='testofre', size=(3,5), groups=2, keywords=['Dop1R1', 'Dop1R2'], colors=['#c1ffc1', '#6f00ff'])
+# %%
+block_return_efficiency(folder, savename='testofbre', size=(3,5), cutoff=350, labels=['LED on inside', 'LED on outisde'], colors=['grey', 'green'])
+# %%
+block_xpos_distribution(folder, savename = 'testkde', size=(6,5), cutoff=500, labels=['LED off', 'LED on'], colors=['grey', 'green'])
+# %%
