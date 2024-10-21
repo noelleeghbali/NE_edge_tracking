@@ -1,5 +1,5 @@
 # %%
-from imaging_analysis import pickle_obj, open_pickle
+from imaging_analysis import *
 from behavior_analysis import *
 from analysis_funs.regression import fci_regmodel
 from analysis_funs.optogenetics import opto
@@ -13,9 +13,12 @@ from scipy import signal as sg
 import sys
 import pickle
 
-datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON09/240726/F2/T1')
+datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON09/241010/F2/T2')
+savedir = os.path.join('/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON09/picklez')
 d = datadir.split(os.path.sep)
 name = d[-3] + '_' + d[-2] + '_' + d[-1]
+savename = f'{name}.pkl'
+
 # %% Registration
 ex = im.fly(name, datadir)
 ex.register_all_images(overwrite=True)
@@ -33,24 +36,36 @@ cx.process_rois()
 cx.crop = False
 cx.save_postprocessing()
 pv2, ft, ft2, ix = cx.load_postprocessing()
+zeros = pv2[pv2['0_mbon09']==0].index.min()
+if pd.notna(zeros):
+    pv2 = pv2.iloc[:zeros]
+    ft2 = ft2.iloc[:zeros]
 img_dict = {'pv2': pv2, 'ft2': ft2}
-#pickle_obj(img_dict, '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON09', '240726_Fly2_T1.pkl')
+pickle_obj(img_dict, savedir, savename)
+
 # %%
 fc = fci_regmodel(pv2[['0_mbon09']].to_numpy().flatten(), ft2, pv2)
 fc.rebaseline(span=600, plotfig=True)
+
+
 # %%
 y = pv2['0_mbon09']
 plt.plot(ft2['instrip'].to_numpy(), color='grey')
 plt.plot(y)
-
-
 fc = fci_regmodel(y, ft2, pv2)
 fc.example_trajectory(cmin=0, cmax=0.5)
 
+# %%
+fc.mean_traj_nF_jump(y, plotjumps=True)
 
 
 # %%
-
+rebaseline(savedir, 'mbon09', span=500)
+# img_dict = open_pickle(f'{figure_folder}/{filename}')
+# pv2, ft2 = process_pickle(img_dict, 'mbon09')
+# ft2_csv = os.path.join(savedir, f'{savename}_ft2.csv')
+# ft2.to_csv(ft2_csv, index=False)
+# %%
 fc = fci_regmodel(pv2[['0_mbon09']].to_numpy().flatten(), ft2, pv2)
 #fc.rebaseline(span=400, plotfig=True)
 regchoice = ['odour onset', 'odour offset', 'in odour',

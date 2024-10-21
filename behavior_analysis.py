@@ -82,6 +82,15 @@ def circmean_heading(df, means_list):
     means_list.append(circmean_value)
     return circmean_value
 
+def circular_mean(angles):
+    """Compute the circular mean of a list of angles in degrees."""
+    angles_rad = np.deg2rad(angles)
+    sin_sum = np.sum(np.sin(angles_rad))
+    cos_sum = np.sum(np.cos(angles_rad))
+    mean_angle_rad = np.arctan2(sin_sum, cos_sum)
+    mean_angle_deg = np.rad2deg(mean_angle_rad)
+    return mean_angle_deg
+
 def cart2pol(x, y):
     rho = np.sqrt(x**2 + y**2)
     phi = np.arctan2(y, x)
@@ -102,6 +111,17 @@ def inside_outside(df):
     d = dict([*df.groupby(df['instrip'].ne(df['instrip'].shift()).cumsum())])
     for bout in d:
         if d[bout].instrip.any():
+            di[bout]=d[bout]
+        else:
+            do[bout]=d[bout]
+    return d, di, do
+
+def inside_outside_oct(df):
+    di = {}
+    do = {}
+    d = dict([*df.groupby((df['mfc3_stpt'] > 0).ne((df['mfc3_stpt'] > 0).shift()).cumsum())])
+    for bout in d:
+        if (d[bout]['mfc3_stpt'] > 0).any():
             di[bout]=d[bout]
         else:
             do[bout]=d[bout]
@@ -245,7 +265,7 @@ def exp_parameters(folder_path):  # Create variables for visualization
 
     return params_list
 
-def configure_bw_plot(size=(4,6), kde=False):
+def configure_bw_plot(size=(4,6), xaxis=False):
     fig, axs = plt.subplots(1, 1, figsize=size)
     plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['font.sans-serif'] = 'Arial'
@@ -257,11 +277,16 @@ def configure_bw_plot(size=(4,6), kde=False):
     plt.rcParams['ytick.color'] = 'white'
     plt.gca().spines['top'].set_visible(False)
     plt.gca().spines['right'].set_visible(False)
-    plt.gca().spines['bottom'].set_visible(kde)
+    plt.rcParams['text.color'] = 'white'
+    axs.spines['bottom'].set_visible(xaxis)
     axs.spines['bottom'].set_color('white')
     axs.spines['left'].set_color('white')
-    plt.yticks(fontsize=14, color='white')
-
+    axs.spines['left'].set_linewidth(2)
+    axs.tick_params(axis='x', colors='white')
+    axs.tick_params(axis='y', colors='white')
+    if xaxis:
+        axs.xaxis.label.set_color('white')
+        axs.tick_params(axis='x', colors='white')
     plt.gca().spines['left'].set_linewidth(2)
     return fig, axs
 
@@ -303,8 +328,8 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
         plt.ylim(ylim)
         plt.legend()
         plt.title(filename, fontsize=14)
-        axs.set_xlabel('x-position (mm)', fontsize=14)
-        axs.set_ylabel('y-position (mm)', fontsize=14)
+        axs.set_xlabel('x-position (mm)', fontsize=14, color='white')
+        axs.set_ylabel('y-position (mm)', fontsize=14, color='white')
         # Further customization
         axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
         for pos in ['right', 'top']:
@@ -329,13 +354,12 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
         ledc = '#ff355e'
     elif led == 'green':
         ledc = '#0bda51'
-
     for this_experiment in params_list:
         figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
         # If a file is specified and the current file is not the specified one, skip to the next iteration
         if select_file and filename != select_file:
             continue
-        fig, axs = configure_bw_plot(size=(10,10))
+        fig, axs = configure_bw_plot(size=(10,10), xaxis=True)
         # In an odor plume, plot the trajectory when the animal is in the odor
         if plot_type == 'odor':
             plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air')
@@ -356,7 +380,7 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
         plt.xlim(xlim)
         plt.ylim(ylim)
         #plt.legend()
-        plt.title(filename, fontsize=14)
+        plt.title(filename, fontsize=14, color='white')
         axs.set_xlabel('x-position (mm)', fontsize=14)
         axs.set_ylabel('y-position (mm)', fontsize=14)
         # Further customization
@@ -368,7 +392,8 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
         for _, spine in axs.spines.items():
             spine.set_linewidth(2)
         for spine in axs.spines.values():
-            spine.set_edgecolor('black')
+            spine.set_edgecolor('white')
+        axs.tick_params(axis='both', colors='white')
         # Save and show the plot
         if save:
             plt.savefig(os.path.join(figure_folder, savename))
@@ -376,7 +401,7 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
             plt.show()
 
 def return_efficiency(folder_path, savename, size=(3,5), groups=2, keywords = ['Dop1R1', 'Dop1R2'], colors=['#c1ffc1', '#6f00ff']):
-    fig, axs = configure_bw_plot(size=size, kde=False)
+    fig, axs = configure_bw_plot(size=size, xaxis=False)
     returns = {f'returns_r{i+1}': [] for i in range(groups)}
     params_list = exp_parameters(folder_path)
     for this_experiment in params_list:
@@ -405,11 +430,170 @@ def return_efficiency(folder_path, savename, size=(3,5), groups=2, keywords = ['
     plt.xlim(0.5, groups + 0.5)
     plt.tight_layout()
     plt.show()
-    fig.savefig(savename, bbox_inches='tight')
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def uw_tracking(folder_path, savename, size=(3,5), groups=2, keywords = ['Dop1R1', 'Dop1R2'], colors=['#c1ffc1', '#6f00ff']):
+    fig, axs = configure_bw_plot(size=size, xaxis=False)
+    dists = {f'dists_{i+1}': [] for i in range(groups)}
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        exp_df = exp_df.loc[exp_df['ft_posy'] - yo <= 1000] # cut off at 1000
+        df_odor = df_odor.loc[df_odor['ft_posy'] - yo <= 1000] # cut off at 1000
+        d, d_in, d_out = inside_outside(exp_df)
+        for i in range(groups):
+            if keywords[i] in filename:
+                uw = df_odor['ft_posy'].max() - yo
+                dists[f'dists_{i+1}'].append(uw/1000)
+    averages = [sum(dists[f'dists_{i+1}']) / len(dists[f'dists_{i+1}']) if dists[f'dists_{i+1}'] else 0 for i in range(groups)]
+    noise = 0.05
+    x_values = [np.random.normal(i+1, noise, size=len(dists[f'dists_{i+1}'])) for i in range(groups)]
+    for i in range(groups):
+        plt.scatter(x_values[i], dists[f'dists_{i+1}'], color=colors[i % len(colors)], alpha=0.5)
+    plt.plot(range(1, groups+1), averages, color='white')
+    # for i in range(groups):
+    #     plt.scatter(i+1, averages[i], color='none', edgecolor='white', marker='o', linewidth=2, s=100)
+    plt.ylabel('distance tracked (m)', fontsize=18, color='white')
+    plt.yticks(fontsize=14, color='white')
+    axs.set_xticks(range(1, groups+1))
+    axs.set_xticklabels(keywords, fontsize=16, color='white', rotation=45)
+    plt.xlim(0.5, groups + 0.5)
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def pulse_return_efficiency(folder_path, savename, size=(5, 5), groups=3):
+    fig, axs = configure_bw_plot(size=size, xaxis=False)
+    returns = {f'returns_r{i+1}': [] for i in range(groups)}
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        #last_on_index = exp_df[exp_df['ft_posy'] - yo 
+        exp_df = exp_df.loc[exp_df['ft_posy'] - yo <= 1000] # account for active tracking only
+        de, d_in, d_out = inside_outside(exp_df)
+        dl, d_on, d_off = light_on_off(exp_df)
+        pl = get_a_bout_calc(exp_df, 'path_length') / 1000
+        counts = {f'returns_{i+1}': 0 for i in range(groups)}
+        if len(d_on) < 1:
+            for key, df in d_out.items():
+                if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge(df):
+                    counts['returns_1'] += 1
+            returns['returns_r1'].append(counts['returns_1'] / pl)
+        elif len(d_on) == 1:
+            for key, df in d_out.items():
+                if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge(df):
+                    counts['returns_2'] += 1
+            returns['returns_r2'].append(counts['returns_2'] / pl)
+        elif len(d_on) > 1:
+            for key, df in d_out.items():
+                if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge(df):
+                    counts['returns_3'] += 1
+            returns['returns_r3'].append(counts['returns_3'] / pl)
+            
+    averages = [sum(returns[f'returns_r{i+1}']) / len(returns[f'returns_r{i+1}']) if returns[f'returns_r{i+1}'] else 0 for i in range(groups)]
+    noise = 0.05
+    x_values = [np.random.normal(i+1, noise, size=len(returns[f'returns_r{i+1}'])) for i in range(groups)]
+    for i in range(groups):
+        plt.scatter(x_values[i], returns[f'returns_r{i+1}'], color='grey', alpha=0.5)
+    plt.plot(range(1, groups+1), averages, color='white')
+    # for i in range(groups):
+    #     plt.scatter(i+1, averages[i], color='none', edgecolor='white', marker='o', linewidth=2, s=100)
+    plt.ylabel('returns per meter', fontsize=18, color='white')
+    plt.yticks(fontsize=14, color='white')
+    axs.set_xticks(range(1, groups+1))
+    axs.set_xticklabels(['no activation', 'single activation', 'multiple activation'], fontsize=16, color='white', rotation=45)
+    plt.xlim(0.5, groups + 0.5)
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def pulse_uw_tracking(folder_path, savename, size=(5, 5), groups=3):
+    fig, axs = configure_bw_plot(size=size, xaxis=False)
+    dists = {f'dists_{i+1}': [] for i in range(groups)}
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        exp_df = exp_df.loc[exp_df['ft_posy'] - yo <= 1000] # cut off at 1000
+        df_odor = df_odor.loc[df_odor['ft_posy'] - yo <= 1000] # cut off at 1000
+        de, d_in, d_out = inside_outside(exp_df)
+        dl, d_on, d_off = light_on_off(exp_df)
+        if len(d_on) < 1:
+            uw = df_odor['ft_posy'].max() - yo
+            dists['dists_1'].append(uw)
+        elif len(d_on) == 1:
+            uw = df_odor['ft_posy'].max() - yo
+            dists['dists_2'].append(uw)
+        elif len(d_on) > 1:
+            uw = df_odor['ft_posy'].max() - yo
+            dists['dists_3'].append(uw)
+    averages = [sum(dists[f'dists_{i+1}']) / len(dists[f'dists_{i+1}']) if dists[f'dists_{i+1}'] else 0 for i in range(groups)]
+    noise = 0.05
+    x_values = [np.random.normal(i+1, noise, size=len(dists[f'dists_{i+1}'])) for i in range(groups)]
+    for i in range(groups):
+        plt.scatter(x_values[i], dists[f'dists_{i+1}'], color='grey', alpha=0.5)
+    plt.plot(range(1, groups+1), averages, color='white')
+    # for i in range(groups):
+    #     plt.scatter(i+1, averages[i], color='none', edgecolor='white', marker='o', linewidth=2, s=100)
+    plt.ylabel('distance tracked (mm)', fontsize=18, color='white')
+    plt.yticks(fontsize=14, color='white')
+    axs.set_xticks(range(1, groups+1))
+    axs.set_xticklabels(['no activation', 'single activation', 'multiple activation'], fontsize=16, color='white', rotation=45)
+    plt.xlim(0.5, groups + 0.5)
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def pulse_xpos_distribution(folder_path, savename, size=(5, 5), groups=3):
+    fig, axs = configure_bw_plot(size=size, xaxis=True)
+    dists = {f'dists_{i+1}': [] for i in range(groups)}
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        exp_df = exp_df.loc[exp_df['ft_posy'] - yo <= 1000] # cut off at 1000
+        df_odor = df_odor.loc[df_odor['ft_posy'] - yo <= 1000] # cut off at 1000
+        de, d_in, d_out = inside_outside(exp_df)
+        dl, d_on, d_off = light_on_off(exp_df)
+        xpos = np.abs(df['ft_posx'] - xo)
+        if len(d_on) < 1:
+            dists['dists_1'].append(xpos)
+        elif len(d_on) == 1:
+            dists['dists_2'].append(xpos)
+        elif len(d_on) > 1:
+            dists['dists_3'].append(xpos)
+    compiled_r1 = pd.concat(dists['dists_1'], axis=0, ignore_index=True)
+    compiled_r2 = pd.concat(dists['dists_2'], axis=0, ignore_index=True)
+    compiled_r3 = pd.concat(dists['dists_3'], axis=0, ignore_index=True)
+    axs.axvline(x=25, color='white', linewidth=1)
+    sns.kdeplot(compiled_r1, label='no activation', color='grey', fill=False, cut=0, ax=axs)
+    sns.kdeplot(compiled_r2, label='single activation', color='#ff355e', alpha=0.5, fill=False, cut=0, ax=axs)
+    sns.kdeplot(compiled_r3, label='multiple activation', color='#ff355e', fill=False, cut=0, ax=axs)
+    plt.xticks([0, 250, 500], fontsize=14, color='white')  # Adjust tick locations as needed
+    plt.yticks([0, 0.02], fontsize=14, color='white')  # Adjust tick locations as needed
+    axs.set_xlim(left=0)  # Start the x-axis at 0
+    axs.set_xlabel('x position', fontsize=16, color='white')  # Label for x-axis
+    axs.set_ylabel('probability', fontsize=16, color='white')  # Label for y-axis
+    legend = plt.legend(prop={'size': 14}, frameon=False)  # frameon=False removes the legend box
+    axs.spines['left'].set_position(('data', 0))
+    legend = plt.legend(prop={'size': 10}, frameon=False) 
+    plt.setp(legend.get_texts(), color='white')
+    plt.show()
+    plt.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+    
 
 def block_return_efficiency(folder_path, savename, size=(3,5), cutoff=500, labels = ['LED off', 'LED on'], colors=['#c1ffc1', '#6f00ff']):
     # Right now hard coded for only 2 blocks
-    fig, axs = configure_bw_plot(size=size, kde=False)
+    fig, axs = configure_bw_plot(size=size, xaxis=False)
     params_list = exp_parameters(folder_path)
     rpm_b1 = []
     rpm_b2 = []
@@ -419,7 +603,7 @@ def block_return_efficiency(folder_path, savename, size=(3,5), cutoff=500, label
         b1_df = exp_df[(ypos >= 0) & (ypos < cutoff)]
         b2_df = exp_df[(ypos >= cutoff) & (ypos < 1000)]
         d1, d_in1, d_out1 = inside_outside(b1_df)
-        d2, d_in2, d_out2 = inside_outside(b1_df)
+        d2, d_in2, d_out2 = inside_outside(b2_df)
         pl1 = get_a_bout_calc(b1_df, 'path_length') / 1000
         pl2 = get_a_bout_calc(b2_df, 'path_length') / 1000
         returns_b1 = 0
@@ -444,8 +628,7 @@ def block_return_efficiency(folder_path, savename, size=(3,5), cutoff=500, label
     axs.set_xticks((1,2))
     axs.set_xticklabels(labels, fontsize=16, color='white', rotation=45)
     plt.xlim(0.5, 2.5)
-    plt.tight_layout()
-    
+    plt.tight_layout() 
     plt.show()
     if not os.path.exists(f'{folder_path}/fig/'):
         os.makedirs(f'{folder_path}/fig/')
@@ -453,7 +636,7 @@ def block_return_efficiency(folder_path, savename, size=(3,5), cutoff=500, label
 
 def block_xpos_distribution(folder_path, savename, size=(6,5), cutoff=500, labels = ['LED off', 'LED on'], colors=['#c1ffc1', '#6f00ff']):
     # Right now hard coded for only 2 blocks
-    fig, axs = configure_bw_plot(size=size, kde=True)
+    fig, axs = configure_bw_plot(size=size, xaxis=True)
     params_list = exp_parameters(folder_path)
     xpos_dist_b1 = []
     xpos_dist_b2 = []
@@ -488,6 +671,63 @@ def block_xpos_distribution(folder_path, savename, size=(6,5), cutoff=500, label
     if not os.path.exists(f'{folder_path}/fig/'):
         os.makedirs(f'{folder_path}/fig/')
     fig.savefig(f'{folder_path}/fig/{savename}', bbox_inches='tight')
+
+def avg_entry_angle(folder, window):
+    fig, axs = plt.subplots(subplot_kw={'projection': 'polar'})
+    b1_means = []
+    b2_means = []
+    for folder in folders:
+        for filename in os.listdir(folder):
+            if filename.endswith('.log'):
+                logfile = os.path.join(folder, filename)
+                df = open_log(logfile)
+                df = calculate_trav_dir(df)
+                df_odor = df[df['odor_on']]
+                first_on_index = df_odor.index[0]
+                df = df.loc[first_on_index:]
+                xo = df.iloc[0]['ft_posx']
+                yo = df.iloc[0]['ft_posy']
+                ypos = df['ft_posy'] - yo
+                b1_df = df[(ypos >= 0) & (ypos < 500)]
+                b2_df = df[ypos >= 500]
+                d1, d_in1, d_out1 = inside_outside(b1_df)
+                d2, d_in2, d_out2 = inside_outside(b2_df)
+                fly_b1_means = []
+                fly_b2_means = []
+                for key, df in d_out1.items():
+                    if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 1:
+                        df = get_last_second(df)
+                        b1_circmean = circmean_heading(df, fly_b1_means)
+                        b1_x, b1_y = pol2cart(1, b1_circmean)
+                        b1_means.append((b1_x, b1_y))
+                    fly_b1_mean = stats.circmean(fly_b1_means, low=-np.pi, high=np.pi, axis=None, nan_policy='omit')
+                    plt.polar([0, fly_b1_mean], [0, 1], color='black', alpha=0.3, solid_capstyle='round')
+                for key, df in d_out2.items():
+                    if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 1: 
+                        df = get_last_second(df)
+                        b2_circmean = circmean_heading(df, fly_b2_means)
+                        b2_x, b2_y = pol2cart(1, b2_circmean)
+                        b2_means.append((b2_x, b2_y))
+                    fly_b2_mean = stats.circmean(fly_b2_means, low=-np.pi, high=np.pi, axis=None, nan_policy='omit')
+                    plt.polar([0, fly_b2_mean], [0, 1], color='#0bdf51', alpha=0.3, solid_capstyle='round')
+    # Convert Cartesian coordinates to arrays for easier manipulation
+    b1_means = np.array(b1_means)
+    b2_means = np.array(b2_means)
+    # Check if arrays are empty before computing summary vectors
+    if b1_means.size > 0:
+        summary_b1_vector = np.mean(b1_means, axis=0)
+        summary_b1_rho, summary_b1_phi = cart2pol(summary_b1_vector[0], summary_b1_vector[1])
+        plt.polar([0, summary_b1_phi], [0, summary_b1_rho], color='black', alpha=1, linewidth=3, label='ctrl', solid_capstyle='round')
+    if b2_means.size > 0:
+        summary_b2_vector = np.mean(b2_means, axis=0)
+        summary_b2_rho, summary_b2_phi = cart2pol(summary_b2_vector[0], summary_b2_vector[1])
+        plt.polar([0, summary_b2_phi], [0, summary_b2_rho], color='#0bdf51', alpha=1, linewidth=3, label='led on', solid_capstyle='round')
+    ax.grid(False)
+    ax.set_yticklabels([])
+    ax.set_theta_zero_location('N')
+    plt.title('entry angles')
+    plt.show()
+
 
 def get_a_bout_calc(df, data_type):
     def path_length(x, y):

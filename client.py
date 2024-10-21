@@ -1,18 +1,12 @@
 from behavior_analysis import *
-from imaging_analysis import plot_FF_trajectory, plot_speed_trajectory, plot_triggered_norm_FF
+from imaging_analysis import *
 
 # Plot a trajectory
-folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2024_exp/allen/KCs_Dop1R1_shRNA'
-select_file = '08022024-113325_MBON21_GtACR_light_crisscross_oct_short_Fly1.log'
-
-trajectory_plotter(folder_path, 50, 100000, -1000, [-500, 500], [-500,500], led='none', hlines=None, select_file=None, plot_type='odor', save=True)
-
-
-
-
-
-
-
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2024_exp/MAIN/MBON21_stim'
+# select_file = '09272024-140600_PAM_Chr_light_crisscross_oct_Fly11_58.log'
+trajectory_plotter_bw(folder_path, 50, 100000, -100, [-500, 500], [0,1000], led='red', hlines=None, select_file=None, plot_type='odor', save=True)
+# pulse_xpos_distribution(folder_path, 'xpos_distribution', size=(5, 5), groups=3)
+# pulse_uw_tracking(folder_path, 'distance tracked', size=(5, 5), groups=3)
 
 
 

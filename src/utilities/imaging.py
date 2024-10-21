@@ -456,16 +456,20 @@ class fly:
         images = io.imread_collection(f)
         try:
             print(chn)
-            original = io.concatenate_images(images)
-        except:
-            print(chn)
             all_images = [image[np.newaxis, ...] for image in images]
             all_images2 = all_images[1:]
             print(np.shape(all_images[0]))
-            extra_im = all_images[0][0, chn, :, :]
+            if len(np.shape(all_images[0])) == 4:
+                extra_im = all_images[0][0, chn, :, :]
+            elif len(np.shape(all_images[0])) == 5:
+                extra_im = all_images[0][0, 0, chn, :, :]
+            #extra_im = all_images[0][0, chn, :, :]
             extra_im = extra_im[np.newaxis, ...]
             all_images2.append(extra_im)
             original = np.concatenate(all_images2)
+        except:
+            print(chn)
+            original = io.concatenate_images(images)
 
         registered = np.zeros(original.shape)
         registered_blurred = np.zeros(original.shape)
@@ -476,7 +480,7 @@ class fly:
             registered_blurred[i] = filters.gaussian(frame, 1)
         reg_results = {}
         return reg_results, registered_blurred
-
+       
     def register_all_images(self, overwrite=True):
         if overwrite or len(os.listdir(self.regfol))==0:
             print('starting')
