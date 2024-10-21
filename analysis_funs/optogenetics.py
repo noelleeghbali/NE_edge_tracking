@@ -89,15 +89,22 @@ class opto:
         plt.scatter(x[led_on],y[led_on],color= [1,0.5,0.5],marker='+')
         plt.gca().set_aspect('equal')
         plt.show()
+        
+        
     def plot_plume_simple(self,meta_data,df):
         
         x = pd.Series.to_numpy(df['ft_posx'])
         y = pd.Series.to_numpy(df['ft_posy'])
-        led_on = df['led1_stpt']==0
-        
-        x,y = self.fictrac_repair(x,y)
+        led_on = df['led1_stpt'].to_numpy()==0
+        instrip = df['instrip'].to_numpy()
+        a_s = meta_data['act_inhib']
+        #x,y = self.fictrac_repair(x,y)
         s_type = meta_data['stim_type']
         plt.figure(figsize=(16,16))
+        if a_s=='act':
+            led_colour = [1,0.8,0.8]
+        elif a_s=='inhib':
+            led_colour = [0.8, 1, 0.8]
         if s_type =='plume':
         
             #pon = pd.Series.to_numpy(df['mfc2_stpt']>0)
@@ -115,12 +122,7 @@ class opto:
             pi = np.pi
             psize =meta_data['PlumeWidth']
             pa = meta_data['PlumeAngle']
-            a_s = meta_data['act_inhib']
-            if a_s=='act':
-                led_colour = [1,0.8,0.8]
-            elif a_s=='inhib':
-                led_colour = [0.8, 1, 0.8]
-            
+
             #xmplume = yrange[1]/np.tan(pi*(pa/180))
             
             if pa ==90:
@@ -128,14 +130,11 @@ class opto:
                 yp = [psize/2, psize/2,-psize/2,-psize/2]
                 xo = [-xlm,xlm,xlm,-xlm, -xlm ]
             else :
-                    xp = [-psize/2, yrange[1]*np.tan(pi*(pa/180))-psize/2,yrange[1]*np.tan(pi*(pa/180))+psize/2, psize/2,-psize/2]
-                    yp = [yrange[0], yrange[1], yrange[1],yrange[0],yrange[0]]
-                    xo = [-xlm,xlm,xlm,-xlm, -xlm ]
+                xp = [-psize/2, yrange[1]*np.tan(pi*(pa/180))-psize/2,yrange[1]*np.tan(pi*(pa/180))+psize/2, psize/2,-psize/2]
+                yp = [0, yrange[1], yrange[1],0,0]
+                xo = [-xlm,xlm,xlm,-xlm, -xlm ]
             #pan = meta_data['PlumeAngle']
-            
-             
-            
-            
+
             if meta_data['ledOny']=='all':
                 lo = yrange[0]
             else:
@@ -164,7 +163,7 @@ class opto:
             if meta_data['LEDinplume']:
                 plt.fill(xo,yo,color = led_colour,alpha= 0.5)
             
-               # plt.scatter(x[led_on],y[led_on], color = [0.8, 0.8 ,0.2])
+                plt.scatter(x[led_on],y[led_on], color = [0.8, 0.8 ,0.2])
             #yxlm = np.max(np.abs(np.append(yrange,xrange)))
             #ymn = np.mean(yrange)
             plt.ylim([np.min(y),np.max(y)])
@@ -173,7 +172,57 @@ class opto:
         elif s_type == 'pulse':
             led = df['led1_stpt']==0
             plt.scatter(x[led],y[led],color=led_colour)
+            
             plt.plot(x,y,color='k')
+        elif s_type == 'alternation':
+            pon = pd.Series.to_numpy(df['instrip']>0)
+            pw = np.where(pon)
+            x = x-x[pw[0][0]]
+            y = y-y[pw[0][0]]
+            yrange = [min(y), max(y)]
+            xrange = [min(x), max(x)]
+            xlm = np.max(np.abs(xrange))
+            
+            # Plt plume
+            pi = np.pi
+            psize =meta_data['PlumeWidth']
+            pa = meta_data['PlumeAngle']
+            
+            if pa ==90:
+                xp = [xrange[0], xrange[1],xrange[1], xrange[0]]
+                yp = [psize/2, psize/2,-psize/2,-psize/2]
+                xo = [-xlm,xlm,xlm,-xlm, -xlm ]
+            else :
+                xp = [-psize/2, yrange[1]*np.tan(pi*(pa/180))-psize/2,yrange[1]*np.tan(pi*(pa/180))+psize/2, psize/2,-psize/2]
+                yp = [0, yrange[1], yrange[1],0,0]
+                xo = [-xlm,xlm,xlm,-xlm, -xlm ]
+            plt.fill(xp,yp,color =[0.8,0.8,0.8])
+            led_diff = np.diff(led_on.astype(int))
+
+            lon = np.where(led_diff>0)[0]
+            loff = np.where(led_diff<0)[0]
+            plt.plot([-100,100],[meta_data['ledOny'],meta_data['ledOny']],color='k',linestyle='--')
+            plt.plot(x[0:lon[0]],y[0:lon[0]],color='k')
+            if len(lon)>len(loff):
+                plt.plot(x[lon[-1]:],y[lon[-1]:],color=led_colour)
+                lon = lon[:-1]
+            else:
+                plt.plot(x[loff[-1]:],y[loff[-1]:],color='k')
+                
+            for il,l in enumerate(lon):
+                plt.plot(x[l:loff[il]],y[l:loff[il]],color=led_colour)
+            for il,l in enumerate(loff[:-1]):
+                xsmall = x[loff[il]+1:lon[il+1]-2]
+                ysmall = y[loff[il]+1:lon[il+1]-2]
+                inplume = instrip[loff[il]+1:lon[il+1]-2]
+                
+                plt.plot(xsmall[inplume],ysmall[inplume],color='k')
+                plt.plot(xsmall[inplume==False],ysmall[inplume==False],color=[0.5,0.5,1])
+                
+                
+                                         
+            
+            
         plt.gca().set_aspect('equal')
         plt.show()
         
@@ -386,5 +435,119 @@ class opto:
                     'median data': mdn_data
             }
         return out_dict
-    
-    
+    def extract_stats_alternation(self,meta_data,df):
+        """
+        
+        Parameters
+        ----------
+        meta_data : TYPE
+            DESCRIPTION.
+        df : TYPE
+            DESCRIPTION.
+
+        Returns out_dict
+        -------
+        Function will return datapoints to do stats on from alternation inhibition
+        experiments. These will be: path length, x distance from plume, time outside
+        plume for inhib and excitation epochs. The data will be the raw values,
+        ratios and medians/means of raw values and ratios.
+
+        """
+        
+        x = pd.Series.to_numpy(df['ft_posx'])
+        y = pd.Series.to_numpy(df['ft_posy'])
+        x,y = self.fictrac_repair(x,y)
+        t = self.get_time(df)
+        led = df['led1_stpt']
+        led_on = led==0 
+        led_diff = np.diff(led_on.astype(int))
+        instrip = df['instrip']
+        lon = np.where(led_diff>0)[0]
+        loff = np.where(led_diff<0)[0]
+        isd = np.diff(instrip)
+        
+        
+        # Clip data from here
+        if len(lon)>len(loff):
+            lon = lon[:-1]
+        
+        data_lon = np.empty((len(lon),4))
+        datakeys = ['max_x','y_travelled','displacement','time_outside']
+        # Go through led on epochs
+        for i,il in enumerate(lon):
+            
+            dx = np.arange(il,loff[i],dtype=int)
+            tx = x[dx]
+            ty = y[dx]
+            tx = tx-tx[0]
+            ty = ty-ty[0]
+            data_lon[i,0] = np.max(np.abs(tx))
+            data_lon[i,1] = ty[-1]
+            dtx = np.diff(tx)
+            dty = np.diff(ty)
+            sdtx = np.sum(np.abs(dtx))
+            sdty = np.sum(np.abs(dty))
+            data_lon[i,2] = np.sqrt(sdtx**2+sdty**2)
+            tt = t[dx]
+            tt = tt-tt[0]
+            data_lon[i,3] = tt[-1]
+            if data_lon[i,3]==0:
+                print(il,loff[i])
+        # Go through led off epochs
+        
+        
+        
+        data_loff = np.empty((len(loff)-1,4)) #1 part shorter because of we are taking data from last led,
+        
+        
+        for i, il in enumerate(loff[:-1]):
+            dx = np.arange(il,lon[i+1],dtype=int)
+            t_is = instrip[dx]
+            tx = x[dx]
+            ty = y[dx]
+            tt = t[dx]
+            tt = tt[t_is==0]
+            tx = tx[t_is==0]
+            ty = ty[t_is==0]
+            tx = tx-tx[0]
+            ty = ty-ty[0]
+            tt = tt-tt[0]
+            
+            data_loff[i,0] = np.max(np.abs(tx))
+            data_loff[i,1] = ty[-1]
+            dtx = np.diff(tx)
+            dty = np.diff(ty)
+            sdtx = np.sum(np.abs(dtx))
+            sdty = np.sum(np.abs(dty))
+            data_loff[i,2] = np.sqrt(sdtx**2+sdty**2)
+            
+            data_loff[i,3] = tt[-1]
+        
+        
+        
+        ratio_dx = np.logical_and(data_loff[:,3]>0.25,data_lon[:-1,3]>0.5)
+        ratio_dx = np.where(ratio_dx)[0]
+        
+        
+        ratios = np.divide(data_lon[ratio_dx,:],data_loff[ratio_dx,:])
+        ratmed = np.median(ratios,axis=0)
+        ratmean = np.mean(ratios,axis=0)
+        ratmed_log = np.median(np.log10(ratios[:,[0,2,3]]),axis=0)
+            
+        out_dict = {'Column Names': datakeys,
+                    'Data_ledON':data_lon,
+                    'Data_ledOFF':data_loff,
+                    'Ratios':ratios,
+                    'Median Ratios': ratmed,
+                    'Mean Ratios': ratmean,
+                    'Median Ratios Log':ratmed_log,
+                    'Ratio_dx':ratio_dx
+                    }
+        return out_dict
+        
+        
+        
+        
+        
+        
+        

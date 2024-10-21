@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Dec  3 12:39:38 2023
+
+@author: dowel
+"""
+
+#%% Regression modelling test ground
 import sklearn.linear_model as lm
 from scipy import stats
 from sklearn.model_selection import GroupKFold
@@ -633,18 +641,24 @@ class fci_regmodel:
         x2 = xcent-5+tj
         y1 = 0
         y2 = yj[0]
-        xvec = [x1,x2,x2,x1]
+        xvec = np.array([x1,x2,x2,x1])
         yvec = [y1,y1,y2,y2]
+        
+        cents = [-630,-420,-210, 0,210,420,630]
+        
         plt.fill(xvec,yvec,color=[0.7,0.7,0.7])
+        for c in cents:
+            plt.fill(xvec+c,yvec,color=[0.7,0.7,0.7])
         for i,j in enumerate(jn):
             tj = jumps[j]
             x1 = xcent+5+tj
             x2 = xcent-5+tj
             y1 = yj[i]
             y2 = yj[i+1]
-            xvec = [x1,x2,x2,x1]
+            xvec = np.array([x1,x2,x2,x1])
             yvec = [y1,y1,y2,y2]
-            plt.fill(xvec,yvec,color=[0.7,0.7,0.7])
+            for c in cents:
+                plt.fill(xvec+c,yvec,color=[0.7,0.7,0.7])
 
         
         for i in range(len(x)-1):
@@ -655,6 +669,9 @@ class fci_regmodel:
         plt.xlabel('x position (mm)')
         plt.ylabel('y position (mm)')
         plt.title('Flur range 0 - ' + str(cmax))
+        x1 = np.min(x)-10
+        x2 = np.max(x)+10
+        plt.xlim([x1,x2])
         ax = plt.gca()
         ax.set_aspect('equal', adjustable='box')
         plt.show()
@@ -727,136 +744,133 @@ class fci_regmodel:
         if output:
             return plt_mn,t
         
-    def mean_traj_nF_jump(self, ca, plotjumps=False):
+    def mean_traj_nF_jump(self,ca,plotjumps=False,cmx=False,offsets=20):
         ft2 = self.ft2
         pv2 = self.pv2
-
+        
         jumps = ft2['jump']
-        #jumps = jumps - (jumps % 5)
         ins = ft2['instrip']
         x = ft2['ft_posx'].to_numpy()
         y = ft2['ft_posy'].to_numpy()
         times = pv2['relative_time']
-        #x, y = self.fictrac_repair(x, y)
+        #x,y = self.fictrac_repair(x,y)
         insd = np.diff(ins)
-        ents = np.where(insd > 0)[0] + 1
-        exts = np.where(insd < 0)[0] + 1 
+        ents = np.where(insd>0)[0]+1
+        exts = np.where(insd<0)[0]+1 
         jd = np.diff(jumps)
-        jn = np.where(np.abs(jd) > 0)[0]
-        jkeep = np.where(np.diff(jn) > 1)[0]
+        jn = np.where(np.abs(jd)>0)[0]
+        jkeep = np.where(np.diff(jn)>1)[0]
         jn = jn[jkeep]
         jns = np.sign(jd[jn])
 
         time_threshold = 60
         
-        v, c = np.unique(jns, return_counts=True)
+        # Pick the most common side
+        v,c = np.unique(jns,return_counts=True)
         side = v[np.argmax(c)]
-        
+        # Get time of return: choose quick returns
         dt = []
-        for i, j in enumerate(jn):
-            ex = exts - j
+        for i,j in enumerate(jn):
+            ex = exts-j
             ie = np.argmin(np.abs(ex))
-            t_ent = ie + 1
+            t_ent = ie+1
             sub_dx = exts[ie]
-            tdx = np.arange(ents[ie], ents[t_ent], step=1, dtype='int')
-            dt.append(times[tdx[-1]] - times[sub_dx])
-        this_j = jn[np.logical_and(jns == side, np.array(dt) < time_threshold)]
-
-        inplume_traj = np.zeros((50, len(this_j), 2))
-        outplume_traj = np.zeros((50, len(this_j), 2))
-        inplume_amp = np.zeros((50, len(this_j)))
-        outplume_amp = np.zeros((50, len(this_j)))
+            tdx = np.arange(ents[ie],ents[t_ent],step=1,dtype='int')
+            dt.append(times[tdx[-1]]-times[sub_dx])
+        this_j = jn[np.logical_and(jns==side, np.array(dt)<time_threshold)]
         
-        side_mult = side * -1 #if side < 0 else side
-        x = x * side_mult
+        # Initialise arrays
+        inplume_traj = np.zeros((100,len(this_j),2))
+        outplume_traj = np.zeros((100,len(this_j),2))
+        inplume_amp = np.zeros((100,len(this_j)))
+        outplume_amp = np.zeros((100,len(this_j)))
+        side_mult = side*-1
+        x = x*side_mult
         amp = ca
         off = 0
-
-        # Initialize a figure and axis object
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
-        for i, j in enumerate(this_j):
-            ex = exts - j
+        for i,j in enumerate(this_j):
+            print(i)
+            ex = exts-j
             ie = np.argmin(np.abs(ex))
-            t_ent = ie + 1
+            t_ent = ie+1
             sub_dx = exts[ie]
-
-            ipdx = np.arange(ents[ie], sub_dx, step=1, dtype=int)
-            old_time = ipdx - ipdx[0]
+            # in plume    
+            ipdx = np.arange(ents[ie],sub_dx,step=1,dtype=int)
+            old_time = ipdx-ipdx[0]
             ip_x = x[ipdx]
             ip_y = y[ipdx]
-            ip_x = ip_x - ip_x[-1]
-            #ip_x = ip_x * -1
-            ip_y = ip_y - ip_y[-1]
-            new_time = np.linspace(0, max(old_time), 50)
-            x_int = np.interp(new_time, old_time, ip_x)
-            y_int = np.interp(new_time, old_time, ip_y)
-            a_int = np.interp(new_time, old_time, amp[ipdx])
-            inplume_traj[:, i, 0] = x_int
-            inplume_traj[:, i, 1] = y_int
-            inplume_amp[:, i] = a_int
+            ip_x = ip_x-ip_x[-1]
+            ip_y = ip_y-ip_y[-1]
+            new_time = np.linspace(0,max(old_time),100)
+            x_int = np.interp(new_time,old_time,ip_x)
+            y_int = np.interp(new_time,old_time,ip_y)
+            a_int = np.interp(new_time,old_time,amp[ipdx])
+            inplume_traj[:,i,0] = x_int
+            inplume_traj[:,i,1] = y_int
+            inplume_amp[:,i] = a_int
             
-            ipdx = np.arange(sub_dx, ents[t_ent], step=1, dtype=int)
-            old_time = ipdx - ipdx[0]
+            # out plume
+            ipdx = np.arange(sub_dx,ents[t_ent],step=1,dtype=int)
+            old_time = ipdx-ipdx[0]
             ip_x = x[ipdx]
             ip_y = y[ipdx]
-            ip_x = ip_x - ip_x[0]
-            #ip_x = ip_x * -1
-            ip_y = ip_y - ip_y[0]
-            new_time = np.linspace(0, max(old_time), 50)
-            x_int = np.interp(new_time, old_time, ip_x)
-            y_int = np.interp(new_time, old_time, ip_y)
-            a_int = np.interp(new_time, old_time, amp[ipdx])
-            outplume_traj[:, i, 0] = x_int
-            outplume_traj[:, i, 1] = y_int
-            outplume_amp[:, i] = a_int
+            ip_x = ip_x-ip_x[0]
+            ip_y = ip_y-ip_y[0]
+            new_time = np.linspace(0,max(old_time),100)
+            x_int = np.interp(new_time,old_time,ip_x)
+            y_int = np.interp(new_time,old_time,ip_y)
+            a_int = np.interp(new_time,old_time,amp[ipdx])
+            outplume_traj[:,i,0] = x_int
+            outplume_traj[:,i,1] = y_int
+            outplume_amp[:,i] = a_int
             
             if plotjumps:
-                tj = np.append(inplume_traj[:, i, :], outplume_traj[:, i, :], axis=0)
-                tjca = np.append(inplume_amp[:, i], outplume_amp[:, i], axis=0)
-                self.jump_heat(ax, tj, tjca, xoffset=off)
-            off = off + 30
+                tj = np.append(inplume_traj[:,i,:],outplume_traj[:,i,:],axis=0)
+                tjca = np.append(inplume_amp[:,i],outplume_amp[:,i],axis=0)
+                self.jump_heat(tj,tjca,xoffset=off,set_cmx=cmx)
+            off = off+offsets
             
-        inmean_traj = np.mean(inplume_traj, axis=1)
-        outmean_traj = np.mean(outplume_traj, axis=1)
-        inmean_amp = np.mean(inplume_amp, axis=1)
-        outmean_amp = np.mean(outplume_amp, axis=1)
-        traj = np.append(inmean_traj, outmean_traj, axis=0)
-        tca = np.append(inmean_amp, outmean_amp, axis=0)
-
-        # Show the combined plot
-        if plotjumps:
-            plt.show()
-        
+            
+        inmean_traj = np.mean(inplume_traj,axis=1)
+        outmean_traj = np.mean(outplume_traj,axis=1)
+        inmean_amp = np.mean(inplume_amp,axis=1)
+        outmean_amp = np.mean(outplume_amp,axis=1)
+        traj = np.append(inmean_traj,outmean_traj,axis=0)
+        tca = np.append(inmean_amp,outmean_amp,axis=0)
+        ax = plt.gca()
+        ax.set_aspect('equal', adjustable='box')
         return traj, tca
-
-    def jump_heat(self, ax, traj, ca, xoffset, set_cmx=False):
-        yrange = [np.min(traj[:, 1]), np.max(traj[:, 1])]
-        xfl = np.array([-10, 0, 0, -10, -10]) + xoffset
-        yfl = np.array([yrange[0], yrange[0], 0, 0, yrange[0]])
-        yfl2 = np.array([0, 0, yrange[1], yrange[1], 0])
-        ax.fill(xfl, yfl, color=[0.7, 0.7, 0.7])
-        ax.fill(xfl - 3, yfl2, color=[0.7, 0.7, 0.7])
-        ax.plot(np.array([0, 0]) + xoffset, [yrange[0], 0], color='k', linestyle='--')
-        ax.plot(np.array([-3, -3]) + xoffset, [yrange[1], 0], color='k', linestyle='--')
+    def jump_heat(self,traj,ca,xoffset,set_cmx=False):
+        
+        yrange = [np.min(traj[:,1]),np.max(traj[:,1])]
+        xfl = np.array([-10,0,0,-10,-10])+xoffset
+        yfl = np.array([yrange[0],yrange[0],0,0,yrange[0]])
+        yfl2 = np.array([0,0,yrange[1],yrange[1],0])
+        plt.fill(xfl,yfl,color=[0.7,0.7,0.7])
+        plt.fill(xfl-3,yfl2,color=[0.7,0.7,0.7])
+        plt.plot(np.array([0,0])+xoffset,[yrange[0],0],color='k',linestyle='--')
+        plt.plot(np.array([-3,-3])+xoffset,[yrange[1],0],color='k',linestyle='--')
         
         colour = ca
-        if not set_cmx:
+        if set_cmx==False:
             cmx = np.max(np.abs(ca))
+        else:
+            cmx = set_cmx
         c_map = plt.get_cmap('coolwarm')
         cnorm = mpl.colors.Normalize(vmin=-cmx, vmax=cmx)
-        scalarMap = mpl.cm.ScalarMappable(norm=cnorm, cmap=c_map)
+        scalarMap = cm.ScalarMappable(cnorm, c_map)
         c_map_rgb = scalarMap.to_rgba(colour)
         
-        for i in range(len(ca) - 1):
-            x = traj[i:i + 2, 0]
-            y = traj[i:i + 2, 1]
-            ax.plot(x + xoffset, y, color=c_map_rgb[i, :])
-
+        for i in range(len(ca)-1):
+            x = traj[i:i+2,0]
+            y = traj[i:i+2,1]
+            #ca = np.mean(ca[i:i+2])
+            plt.plot(x+xoffset,y,color=c_map_rgb[i,:])
     def mean_traj_heat_jump(self,CA,xoffset=0,set_cmx =False,cmx=1):
         traj,ca = self.mean_traj_nF_jump(CA)
-        self.jump_heat(traj,ca,xoffset,side=side)
-        
+        self.jump_heat(traj,ca,xoffset)
+        ax = plt.gca()
+        ax.set_aspect('equal', adjustable='box')
         
     def mean_traj_nF(self,use_rebase = True,tnstring='0_fsbtn'):
         """
@@ -900,8 +914,11 @@ class fci_regmodel:
         ex_x = np.round(x[exts])
         sides = np.zeros(len(ent_x))
         plume_centre = np.zeros(len(ent_x))
+        try:
+            jumps = self.ft2['jump'].to_numpy()
+        except :
+            jumps = np.zeros_like(x)
         
-        jumps = self.ft2['jump'].to_numpy()
         jumps = jumps-np.mod(jumps,3)
         jd = np.diff(jumps)
         jn = np.where(np.abs(jd)>0)[0]+1

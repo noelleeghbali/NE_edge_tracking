@@ -26,7 +26,7 @@ import pandas as pd
 import os
 import xml.etree.ElementTree as ET
 import datetime
-from src.utilities import funcs as fn
+from analysis_funs.utilities import funcs as fn
 import matplotlib.pyplot as plt
 import fnmatch
 import pickle
@@ -46,7 +46,6 @@ class CX:
             if item.is_dir():
                 for file in os.scandir(item):
                     if file.is_file() and file.name.endswith('.xml'):
-                        print('found')
                         self.imagefol = os.path.join(self.datafol, item.name)
 # %% Executive functions
     def save_preprocessing(self, overwrite=True):
@@ -134,16 +133,16 @@ class CX:
         phase_offset = fn.wrap(phase-offset)
         
         return phase, phase_offset, amp
-    def phase_yoke(self,yoke_roi,tether_roi):
+    def phase_yoke(self,yoke_roi,tether_roi,ft2,pv2):
         # Function will output phase and amplitude of columnar regions.
         # Specify a yoke and tether ROI to do the determination
         self.yoke_roi = yoke_roi
         self.tether_roi = tether_roi
-        pv2, ft, ft2, ix  = self.load_postprocessing()
+        #pv2, ft, ft2, ix  = self.load_postprocessing()
         self.pv2 = pv2
-        self.ft = ft
+        #self.ft = ft
         self.ft2 = ft2
-        self.ix = ix
+        #self.ix = ix
         print('Yoking to: ', yoke_roi)        
         yoke_wedges = pv2.filter(regex=yoke_roi)
         yoke_wedges.fillna(method='ffill', inplace=True)
@@ -152,8 +151,11 @@ class CX:
         offset = self.continuous_offset(yoke_wedges,ft2)
         phase_yoke_offset = fn.wrap(phase-offset)
         fit_wedges, all_params = self.wedges_to_cos(yoke_wedges,phase_offset = offset)
+        rot_wedges = self.rotate_wedges(yoke_wedges,phase_offset =offset)
         d = {
         'wedges_' + yoke_roi: yoke_wedges,
+        'wedges_offset_' + yoke_roi: rot_wedges,
+        'phase_' + yoke_roi: phase,
         'offset': offset,
         'offset_' + yoke_roi +'_phase': phase_yoke_offset,
         'fit_wedges_' + yoke_roi: fit_wedges,
@@ -163,13 +165,19 @@ class CX:
         for roi in tether_roi:
             print(roi)
             teth_wedges = pv2.filter(regex=roi)
+            
             teth_wedges.fillna(method='ffill',inplace=True)
             teth_wedges  = teth_wedges.to_numpy()
+            
             phase_teth,amp = self.get_centroidphase(teth_wedges)
             phase_teth_off = fn.wrap(phase_teth-offset)
+            
             fit_wedges,all_params = self.wedges_to_cos(teth_wedges,phase_offset = offset)
+            rot_wedges = self.rotate_wedges(teth_wedges,phase_offset =offset)
             d.update({
             'wedges_' + roi: teth_wedges,
+            'wedges_offset_' + roi: rot_wedges,
+            'phase_' + roi: phase_teth,
             'offset_' + roi +'_phase': phase_teth_off,
             'fit_wedges_' + roi: fit_wedges,
             'all_params_' + roi: all_params,
@@ -189,6 +197,19 @@ class CX:
             fit_wedges[i,:] = fit
             all_params[i,:] = params
         return fit_wedges, all_params
+    def rotate_wedges(self,wedges,phase_offset=None):
+        pi = np.pi
+        if phase_offset is None:
+            rot_wedges = wedges
+        else:
+            rot_wedges = np.zeros_like(wedges)
+            offset_idx = np.round(8*phase_offset/pi).astype(int)
+            for i,o in enumerate(offset_idx):
+                tw = wedges[i,:]
+                rot_wedges[i,:] = np.append(tw[o:],tw[:o])
+            
+        return rot_wedges
+            
     def continuous_offset(self, data,ft2):
         """
         calculate the phase offset between tube and epg bumps
@@ -216,8 +237,15 @@ class CX:
             pv_spike_time = timing.total_time[0] + spikes['Time(ms)'] / 1000
             # find index values when ft computer sent pulses (pulses
             ft_idx, _ = sg.find_peaks(ft.sig_status, height=0.8)
+            
+            
+            # CD edit - sometimes first spike is not registered as peak
+            sp = spikes[' Input 0'].to_numpy()
+            #sp = np.append(np.median(sp),sp)
+            
             # find index values when pv computer received pulses (pulses are 3V)
-            pv_idx, _ = sg.find_peaks(spikes[' Input 0'], height=2.5)
+            pv_idx, _ = sg.find_peaks(sp, height=2.5)
+            #pv_idx = pv_idx-1
             # if the first peak occurs at the beginning of the pv voltage trace, discard
             # if abs(pv_spike_time[pv_idx[0]]-timing.total_time[0])<0.5:
             #     pv_idx = pv_idx[1:]
@@ -436,6 +464,7 @@ class CX:
                 upsampled_dict[column] = np.interp(upsampled_seconds, seconds, dropt_df[column])
             pv2 = pd.DataFrame(upsampled_dict)
         print(pv2)
+       
         # bin fictrac data based on closest timepoint to imaging data
         ft = self.load_preprocessing()
         ft['seconds'] = ft['seconds']-delta_t
@@ -597,8 +626,8 @@ class CX:
                       'alt_timestep'
                 ]
                 df = pd.read_table(file_path, delimiter='[,]', names = names, engine='python')
-                df.ft_posx = -3*df.ft_posx # flip x and y for mirror inversion
-                df.ft_posy = -3*df.ft_posy
+                df.ft_posx = 3*df.ft_posx # CD edit: no longer flipping x flip x and y for mirror inversion
+                df.ft_posy = -3*df.ft_posy # 
                 df.ft_speed = 3*df.ft_speed
                 df['seconds'] = (df.timestamp-df.timestamp.iloc[0])/1000
                 return df
@@ -621,7 +650,8 @@ class CX:
         df['motor_step_command'] = pd.to_numeric(df.motor_step_command)
 
         # CAUTION: invert x. Used to correct for mirror inversion, y already flipped in voe
-        df['ft_posx'] = -df['ft_posx']
+        # CD edit: this sign flip has been reversed as is no longer an issue
+        df['ft_posx'] = df['ft_posx']
 
         #calculate when fly is in strip
         df['instrip'] = np.where(df['mfc2_stpt']>0.0, True, False)
@@ -681,7 +711,8 @@ class CX:
         df_combine.motor_heading[df_combine.motor_heading>3*np.pi/4]=3*np.pi/4
 
         # remap heading to (-pi, pi), invert because of mirror flip
-        df_combine['ft_heading'] = -fn.wrap(fn.unwrap(df_combine.ft_heading))
+        # CD edit: remove sign flip because this is no longer an issue
+        df_combine['ft_heading'] = fn.wrap(fn.unwrap(df_combine.ft_heading))
 
         # make interpolated voe time the time used for alignment with ft
         if 'seconds_y' in df_combine.columns:
@@ -757,6 +788,64 @@ class CX:
         setattr(self, 'spikes', spikes)
         setattr(self, 'timing', timing)
         return ft
+    
+    def bumpstraighten(self,ft,ft2):
+        x = ft2['ft_posx'].to_numpy()
+        y = ft2['ft_posy'].to_numpy()
+        heading = ft2['ft_heading']
+        obumps = ft['bump'].to_numpy()
+        obumps_u = obumps[np.abs(obumps)>0]
+        obumpsfr = ft['frame'][np.abs(obumps)>0]
+        bumps = ft2['bump']
+        frames = ft2['frame']
+        bumps_new = np.zeros_like(bumps)
+        for i,f in enumerate(obumpsfr):
+            
+            frd = frames-f
+            w = np.argmin(np.abs(frd))
+            
+            bumps_new[w] = obumps_u[i]
+        
+        
+        bumps = bumps_new
+        binst = np.where(np.abs(bumps)>0)[0]
+        xnew = x.copy()
+        ynew = y.copy()
+        headingnew = heading.copy()
+        tbold = 0
+        for b in range(len(binst)-1):
+            bi = binst[b]
+            tb = bumps[bi]+tbold
+            tbold = tb
+            bdx = np.arange(bi,binst[b+1],step=1,dtype=int)
+            bc =np.cos(-tb)
+            bs = np.sin(-tb)
+            tx = x[bdx]
+            ty = y[bdx]
+            tx = tx-tx[0]
+            ty = ty-ty[0]
+            tx2 = tx*bc-ty*bs
+            ty2 = tx*bs+ty*bc
+            dx = tx2[0]-xnew[bdx[0]-1]
+            dy = tx2[0]-ynew[bdx[0]-1]
+            tx2 = tx2-dx
+            ty2 = ty2-dy
+            xnew[bdx] = tx2
+            ynew[bdx] = ty2
+            
+            th = heading[bdx]+tb
+            tc = np.cos(th)
+            ts = np.sin(th)
+            th = np.arctan2(ts,tc)
+            headingnew[bdx] = th
+            
+            
+        dx = xnew[(bdx[-1]+1)]-xnew[bdx[-1]]
+        xnew[(bdx[-1]+1):] = xnew[(bdx[-1]+1):]-dx
+        dy = ynew[(bdx[-1]+1)]-ynew[bdx[-1]]
+        ynew[(bdx[-1]+1):] = ynew[(bdx[-1]+1):]-dy
+        
+        return xnew,ynew,headingnew
         
         
         
