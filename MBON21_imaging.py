@@ -14,7 +14,7 @@ import statsmodels.api as sm
 import sys
 import pickle
 
-datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON21/241010/F1/T3')
+datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON21')
 savedir = os.path.join('/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21/picklez')
 d = datadir.split(os.path.sep)
 name = d[-3] + '_' + d[-2] + '_' + d[-1]

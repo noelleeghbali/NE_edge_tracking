@@ -11,6 +11,7 @@ import seaborn as sns
 import os
 import pickle
 from scipy.stats import gaussian_kde
+from scipy.stats import ttest_rel
 from sklearn.linear_model import LinearRegression
 from scipy.interpolate import interp1d
 import itertools
@@ -34,6 +35,7 @@ def open_pickle(filename):  # Open a pickle of preprocessed imaging data for a c
 def process_pickle(img_dict, neuron):
     pv2 = img_dict['pv2']
     ft2 = img_dict['ft2']
+    # print(ft2.columns)
     ft2['instrip'] = ft2['instrip'].replace({1: True, 0: False})
     pv2['instrip'] = ft2['instrip']
     ft2[neuron] = pv2[f'0_{neuron}']
@@ -81,7 +83,7 @@ def add_odor(axs, di, ymin, ymax):
         time_on = df['relative_time'].iloc[0]
         time_off = df['relative_time'].iloc[-1]
         timestamp = time_off - time_on
-        rectangle = patches.Rectangle((time_on, ymin), timestamp, ymax - ymin, facecolor='orange', alpha=0.5)
+        rectangle = patches.Rectangle((time_on, ymin), timestamp, ymax - ymin, facecolor='#fbceb1', alpha=0.5)
         axs.add_patch(rectangle)
 
 def add_oct(axs, di, ymin, ymax):
@@ -127,8 +129,10 @@ def stacked_FF(figure_folder, neuron):
             time = ft2['relative_time']
             net_motion = ft2['net_motion'] 
             y_velocity = ft2['y_velocity']  
+            x_velocity = ft2['x_velocity']
             d, di, do = inside_outside(ft2)
-            fig, axs = plt.subplots(3, 1, figsize=(8, 8), sharex=True)
+            fig, axs = plt.subplots(4, 1, figsize=(8, 8), sharex=True)
+            plt.rcParams['text.color'] = 'black'
             plt.rcParams['font.family'] = 'sans-serif'
             plt.rcParams['font.sans-serif'] = 'Arial'
             axs[0].plot(time, FF, color='k', linewidth=.75)
@@ -147,12 +151,18 @@ def stacked_FF(figure_folder, neuron):
             axs[2].set_ylim(-20, 20)
             axs[2].set_ylabel('Upwind Velocity', size=16)
             axs[2].set_xlabel('time (s)', size=16)
+            axs[3].plot(time, y_velocity, color='k', linewidth=.75)
+            add_odor(axs[3], di, -20, 20)
+            axs[3].set_ylim(-20, 20)
+            axs[3].set_ylabel('Crosswind Velocity', size=16)
+            axs[3].set_xlabel('time (s)', size=16)
             #plt.FF(60, 360)
             plt.tight_layout()
+            plt.title(filename)
             plt.show()
-            # if not os.path.exists(f'{figure_folder}/fig/stacked_FF'):
-            #     os.makedirs(f'{figure_folder}/fig/stacked_FF')
-            # fig.savefig(f'{figure_folder}/fig/trace_FF/{savename}.pdf', bbox_inches='tight')
+            if not os.path.exists(f'{figure_folder}/fig/stacked_FF'):
+                os.makedirs(f'{figure_folder}/fig/stacked_FF')
+            fig.savefig(f'{figure_folder}/fig/stacked_FF/{savename}.pdf', bbox_inches='tight')
 
 def stacked_FF_oct(figure_folder, neuron):
     for filename in os.listdir(figure_folder):
@@ -189,9 +199,7 @@ def stacked_FF_oct(figure_folder, neuron):
             plt.show()
             if not os.path.exists(f'{figure_folder}/fig/stacked_FF'):
                 os.makedirs(f'{figure_folder}/fig/stacked_FF')
-            fig.savefig(f'{figure_folder}/fig/trace_FF/{savename}.pdf', bbox_inches='tight')
-
-
+            fig.savefig(f'{figure_folder}/fig/stacked_FF/{savename}.pdf', bbox_inches='tight')
 
 def dF_entries_bw(figure_folder, neuron, thresh=20, sign='pos'):
     if neuron == 'mbon09':
@@ -243,13 +251,21 @@ def dF_entries_bw(figure_folder, neuron, thresh=20, sign='pos'):
                 os.makedirs(f'{figure_folder}/fig/dF_entries_bw')
             fig.savefig(f'{figure_folder}/fig/dF_entries_bw/{savename}.pdf', bbox_inches='tight')
 
-def entry_auc_bw(figure_folder, neuron, unit_time=False, thresh=20):
+def entry_auc_bw(figure_folder, neuron, unit_time=False, thresh=20, oct=True):
     if neuron == 'mbon09':
         color = '#bd33a4'
     elif neuron == 'mbon21':
         color = '#ff4f00'
     elif neuron == 'mbon30':
         color = '#00cc99'
+    if unit_time:
+        save_path = f'{figure_folder}/fig/entry_auc_time_bw'
+    else:
+        save_path = f'{figure_folder}/fig/entry_auc_bw'
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    # Initialize dictionary to store AUCs per entry number
+    entry_aucs_dict = {}
     for filename in os.listdir(figure_folder):
         if filename.endswith('.pkl'):
             savename, extension = os.path.splitext(filename)
@@ -257,8 +273,11 @@ def entry_auc_bw(figure_folder, neuron, unit_time=False, thresh=20):
             pv2, ft2 = process_pickle(img_dict, neuron)
             FF = ft2[neuron]
             time = ft2['relative_time']
-            fig, axs = configure_bw_plot(size=(9, 3), xaxis=True)
-            d, di, do = inside_outside(ft2)
+            fig, axs, markc = configure_bw_plot(size=(9, 3), xaxis=True)
+            if oct:
+                d, di, do = inside_outside_oct(ft2)
+            else:
+                d, di, do = inside_outside(ft2)
             aucs = []
             i = 0
             valid_entries = 0
@@ -267,40 +286,277 @@ def entry_auc_bw(figure_folder, neuron, unit_time=False, thresh=20):
                 key, df = list(di.items())[i]
                 time_on = df['relative_time'].iloc[0]
                 time_off = df['relative_time'].iloc[-1]
-                entry_numbers.append(i)
+                entry_numbers.append(i + 1)  # Entry numbers start from 1
                 baseline_mask = (time >= time_on - 0.5) & (time < time_on)
                 baseline = FF[baseline_mask].mean()
                 interval_mask = (time >= time_on) & (time <= time_off)
-                FF_adjusted = FF[interval_mask] - baseline   
-                auc = np.trapz(FF_adjusted, time[interval_mask])  
-                duration = time_off - time_on      
-                if not np.isnan(auc / duration) and unit_time == True:   
-                    aucs.append(auc / duration)
-                    valid_entries += 1 
-                elif not np.isnan(auc / duration) and unit_time == False:
-                    aucs.append(auc)
-                    valid_entries += 1  
+                FF_adjusted = FF[interval_mask] - baseline
+                auc = np.trapz(FF_adjusted, time[interval_mask])
+                duration = time_off - time_on  
+                if not np.isnan(auc / duration):
+                    auc_value = auc / duration if unit_time else auc
+                    aucs.append(auc_value)
+                    valid_entries += 1
                 else:
                     entry_numbers.pop()
                 i += 1  # Move to the next entry
-            entry_numbers = range(1, len(aucs) + 1)
+            # Collect AUCs across files
+            for entry_num, auc_value in zip(entry_numbers, aucs):
+                if entry_num not in entry_aucs_dict:
+                    entry_aucs_dict[entry_num] = []
+                entry_aucs_dict[entry_num].append(auc_value)
+            # Plotting per file
             axs.scatter(entry_numbers, aucs, color=color)
             axs.plot(entry_numbers, aucs, linestyle='-', marker='o', color=color)
             axs.axhline(0, color='white', linestyle='--', linewidth=1)
             axs.set_xticks(entry_numbers)
             axs.set_xticklabels(entry_numbers, color='white')
             plt.title(filename, size=16, color='white')
-            if unit_time:
-                plt.ylabel(r'$\int_{t_on}^{t_off} F(t)/F \, dt$', size=16, color='white')
-                save_path = f'{figure_folder}/fig/entry_auc_per_time_bw'
-            elif not unit_time:
-                plt.ylabel(r'$\int_{t_on}^{t_off} F(t)/F$', size=16, color='white')
-                save_path = f'{figure_folder}/fig/entry_auc_bw'
-            plt.xlabel('entry #', size=16, color='white')
+            ylabel = r'$\int_{t_{on}}^{t_{off}} F(t)/F \, dt$' if unit_time else r'$\int_{t_{on}}^{t_{off}} F(t)/F$'
+            plt.ylabel(ylabel, size=16, color='white')
+            plt.xlabel('Entry #', size=16, color='white')
             plt.show()
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
             fig.savefig(f'{save_path}/{savename}.pdf', bbox_inches='tight')
+    # Compute averages and standard errors
+    sorted_entry_numbers = sorted(entry_aucs_dict.keys())
+    mean_aucs = [np.mean(entry_aucs_dict[entry_num]) for entry_num in sorted_entry_numbers]
+    std_aucs = [np.std(entry_aucs_dict[entry_num], ddof=1) for entry_num in sorted_entry_numbers]
+    n_values = [len(entry_aucs_dict[entry_num]) for entry_num in sorted_entry_numbers]
+    sem_aucs = [std / np.sqrt(n) if n > 1 else 0 for std, n in zip(std_aucs, n_values)]
+    # Generate summary plot
+    fig, axs, markc = configure_bw_plot(size=(9, 3), xaxis=True)
+    axs.errorbar(
+        sorted_entry_numbers,
+        mean_aucs,
+        yerr=sem_aucs,
+        fmt='-o',
+        color=color,
+        ecolor='lightgray',
+        elinewidth=3,
+        capsize=0
+    )
+    axs.axhline(0, color='white', linestyle='--', linewidth=1)
+    axs.set_xticks(sorted_entry_numbers)
+    axs.set_xticklabels(sorted_entry_numbers, color='white')
+    # plt.title('Average AUC across files', size=16, color='white')
+    ylabel = r'Average $\int_{t_{on}}^{t_{off}} F(t)/F \, dt$' if unit_time else r'Average $\int_{t_{on}}^{t_{off}} F(t)/F$'
+    plt.ylabel(ylabel, size=16, color='white')
+    plt.xlabel('entry #', size=16, color='white')
+    plt.show()
+    fig.savefig(f'{save_path}/average_auc.pdf', bbox_inches='tight')
+
+def entry_peaks_first_two(figure_folder, neuron, thresh=20, plotc='black',oct=True):
+    if plotc=='white':
+        fig, axs, markc = configure_white_plot(size=(3,5), xaxis=False)
+    if plotc=='black':
+        fig, axs, markc = configure_bw_plot(size=(3,5), xaxis=False)
+    if neuron == 'mbon09':
+        color = '#bd33a4'
+    elif neuron == 'mbon21':
+        color = '#ff4f00'
+    elif neuron == 'mbon30':
+        color = '#00cc99'
+    save_path = f'{figure_folder}/fig/entry_peaks_first_two'
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    entry_peaks_dict = {}
+    file_peaks = {}  # To maintain pairing of data by file
+
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            savename, extension = os.path.splitext(filename)
+            img_dict = open_pickle(f'{figure_folder}/{filename}')
+            pv2, ft2 = process_pickle(img_dict, neuron)
+            FF = ft2[neuron]
+            time = ft2['relative_time']
+            if oct:
+                d, di, do = inside_outside_oct(ft2)
+            else:
+                d, di, do = inside_outside(ft2)
+            peaks = []
+            i = 0
+            valid_entries = 0
+            entry_numbers = []
+            while valid_entries < thresh and i < len(di):
+                key, df = list(di.items())[i]
+                time_on = df['relative_time'].iloc[0]
+                time_off = df['relative_time'].iloc[-1]
+                entry_numbers.append(i + 1)  # Entry numbers start from 1
+                baseline_mask = (time >= time_on - 0.5) & (time < time_on)
+                baseline = FF[baseline_mask].mean()
+                interval_mask = (time >= time_on) & (time <= time_off)
+                FF_adjusted = FF[interval_mask] - baseline
+                peak_ff = np.max(FF_adjusted)
+
+                # Check for valid peak value
+                if not np.isnan(peak_ff):
+                    peaks.append(peak_ff)
+                    valid_entries += 1
+                else:
+                    entry_numbers.pop()
+                i += 1  # Move to the next entry
+
+            # Store peaks for this file for pairing
+            if 1 in entry_numbers and 2 in entry_numbers:
+                if savename not in file_peaks:
+                    file_peaks[savename] = {}
+                file_peaks[savename][1] = peaks[0]
+                file_peaks[savename][2] = peaks[1]
+
+    # Extract paired data for entry 1 and 2
+    entry1_peaks = []
+    entry2_peaks = []
+    differences = []
+    for file, peaks in file_peaks.items():
+        if 1 in peaks and 2 in peaks:
+            entry1_peaks.append(peaks[1])
+            entry2_peaks.append(peaks[2])
+            differences.append((peaks[2] - peaks[1])/peaks[1])
+    # Print the differences
+    print("Fold changes frrom the first to second peaks:")
+    for i, diff in enumerate(differences):
+        print(f"File {i + 1}: {diff:.4f}")
+    noise = 0.05 * np.random.randn(len(entry1_peaks))    
+    # Scatter and connect paired points
+    for i, (peak1, peak2) in enumerate(zip(entry1_peaks, entry2_peaks)):
+        axs.scatter(1 + noise[i], peak1, color=color, alpha=0.7)
+        axs.scatter(2 + noise[i], peak2, color='#0070C0', alpha=0.7)
+        axs.plot([1 + noise[i], 2 + noise[i]], [peak1, peak2], color='grey', alpha=0.5)
+
+    # Add space around the edges and set labels
+    axs.axhline(0, color=markc, linestyle='--', linewidth=1)
+    axs.set_xticks([1, 2])
+    axs.set_xticklabels(['entry 1', 'entry 2'], fontsize=14)
+    axs.set_xlim(0.5, 2.5)  # Adjust x-axis limits for better spacing
+    plt.ylabel('peak dF/F', color=markc, size=16)
+    plt.xlabel('entry #', color=markc, size=16)
+    plt.tight_layout()
+    plt.show()
+    fig.savefig(f'{save_path}/paired_entry_peaks.pdf', bbox_inches='tight')
+
+def calculate_auc(di, time, FF):
+    auc_list = []
+    for key, df in di.items():
+        time_on = df['relative_time'].iloc[0]
+        time_off = df['relative_time'].iloc[-1]
+        baseline_mask = (time >= time_on - 0.5) & (time < time_on)
+        interval_mask = (time >= time_on) & (time <= time_off)
+        if baseline_mask.sum() == 0 or interval_mask.sum() == 0:
+            continue
+        baseline = FF[baseline_mask].mean()
+        FF_adjusted = FF[interval_mask] - baseline
+        auc = np.trapz(FF_adjusted, time[interval_mask])
+        duration = time_off - time_on
+        if duration <= 0 or np.isnan(auc / duration):
+            continue
+        auc_list.append(auc/duration)
+    return auc_list
+
+def calculate_peak(di, time, FF):
+    peak_list = []
+    for key, df in di.items():
+        time_on = df['relative_time'].iloc[0]
+        time_off = df['relative_time'].iloc[-1]
+        baseline_mask = (time >= time_on - 0.5) & (time < time_on)
+        interval_mask = (time >= time_on) & (time <= time_off)
+        if baseline_mask.sum() == 0 or interval_mask.sum() == 0:
+            continue
+        baseline = FF[baseline_mask].mean()
+        FF_adjusted = FF[interval_mask] - baseline
+        peak_ff = np.max(FF_adjusted)
+        peak_list.append(peak_ff)
+    return peak_list
+
+def entry_peaks_first_ten(figure_folder, neuron, thresh=10, plotc='black', oct=True):
+    if plotc == 'white':
+        fig, axs, markc = configure_white_plot(size=(6, 5), xaxis=False)
+    if plotc == 'black':
+        fig, axs, markc = configure_bw_plot(size=(6, 5), xaxis=False)
+    if neuron == 'mbon09':
+        color = '#bd33a4'
+    elif neuron == 'mbon21':
+        color = '#ff4f00'
+    elif neuron == 'mbon30':
+        color = '#00cc99'
+    save_path = f'{figure_folder}/fig/entry_peaks_first_ten'
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    entry_peaks_dict = {}
+    file_peaks = {}  # To maintain pairing of data by file
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            savename, extension = os.path.splitext(filename)
+            img_dict = open_pickle(f'{figure_folder}/{filename}')
+            pv2, ft2 = process_pickle(img_dict, neuron)
+            FF = ft2[neuron]
+            time = ft2['relative_time']
+            if oct:
+                d, di, do = inside_outside_oct(ft2)
+            else:
+                d, di, do = inside_outside(ft2)
+            peaks = []
+            i = 0
+            valid_entries = 0
+            entry_numbers = []
+            while valid_entries < thresh and i < len(di):
+                key, df = list(di.items())[i]
+                time_on = df['relative_time'].iloc[0]
+                time_off = df['relative_time'].iloc[-1]
+                entry_numbers.append(i + 1)  # Entry numbers start from 1
+                baseline_mask = (time >= time_on - 0.5) & (time < time_on)
+                baseline = FF[baseline_mask].mean()
+                interval_mask = (time >= time_on) & (time <= time_off)
+                FF_adjusted = FF[interval_mask] - baseline
+                peak_ff = np.max(FF_adjusted)
+
+                # Check for valid peak value
+                if not np.isnan(peak_ff):
+                    peaks.append(peak_ff)
+                    valid_entries += 1
+                else:
+                    entry_numbers.pop()
+                i += 1  # Move to the next entry
+
+            # Store peaks for this file for pairing
+            for j in range(min(thresh, len(peaks))):
+                if savename not in file_peaks:
+                    file_peaks[savename] = {}
+                file_peaks[savename][j + 1] = peaks[j]
+
+    # Extract paired data for entries 1 through 10
+    entry_peaks = {i: [] for i in range(1, thresh + 1)}
+    for file, peaks in file_peaks.items():
+        for entry in range(1, thresh + 1):
+            if entry in peaks:
+                entry_peaks[entry].append(peaks[entry])
+
+    # Scatter plot for each entry
+    noise = 0.05 * np.random.randn(len(entry_peaks[1]))
+    for entry in range(1, thresh + 1):
+        if entry in entry_peaks:
+            for i, peak in enumerate(entry_peaks[entry]):
+                axs.scatter(entry + noise[i], peak, color=color if entry == 1 else '#0070C0', alpha=0.7)
+
+    # Plot connections between consecutive entries
+    for i in range(len(entry_peaks[1])):
+        x = []
+        y = []
+        for entry in range(1, thresh + 1):
+            if len(entry_peaks[entry]) > i:
+                x.append(entry + noise[i])
+                y.append(entry_peaks[entry][i])
+        axs.plot(x, y, color='grey', alpha=0.5)
+
+    # Add space around the edges and set labels
+    axs.axhline(0, color=markc, linestyle='--', linewidth=1)
+    axs.set_xticks(range(1, thresh + 1))
+    axs.set_xticklabels([f'entry {i}' for i in range(1, thresh + 1)], fontsize=10, rotation=45)
+    axs.set_xlim(0.5, thresh + 0.5)  # Adjust x-axis limits for better spacing
+    plt.ylabel('peak dF/F', color=markc, size=16)
+    plt.xlabel('entry #', color=markc, size=16)
+    plt.tight_layout()
+    plt.show()
+    fig.savefig(f'{save_path}/paired_entry_peaks_first_ten.pdf', bbox_inches='tight')
 
 def dF_entries_time_bw(figure_folder, neuron, thresh, sign='pos'):
     if neuron == 'mbon09':
@@ -365,13 +621,14 @@ def trace_FF_bw(figure_folder, neuron, window=(30,360)):
             pv2, ft2 = process_pickle(img_dict, neuron)
             FF = ft2[neuron]
             time = ft2['relative_time']
-            fig, axs = configure_bw_plot((15,4), xaxis=True)
+            fig, axs, markc = configure_bw_plot((15,4), xaxis=True)
             d, di, do = inside_outside(ft2)
+            print(di)
             for key, df in di.items():
                 time_on = df['relative_time'].iloc[0]
                 time_off = df['relative_time'].iloc[-1]
                 timestamp = time_off - time_on
-                rectangle = patches.Rectangle((time_on, (FF.min()-0.1)), timestamp, (FF.max() - FF.min() + 0.2), facecolor='#ffa700', alpha=0.8)
+                rectangle = patches.Rectangle((time_on, (FF.min()-0.1)), timestamp, (FF.max() - FF.min() + 0.2), facecolor='#ffa700', alpha=0.6)
                 axs.add_patch(rectangle)
             axs.plot(time, FF, color='white', linewidth=1)
             plt.title(filename, color='white', size=16)
@@ -385,6 +642,267 @@ def trace_FF_bw(figure_folder, neuron, window=(30,360)):
             elif window is None:
                 fig.savefig(f'{figure_folder}/fig/trace_FF_bw/{savename}.pdf', bbox_inches='tight')
             plt.show()
+
+def et_replay_traces_bw(figure_folder, lobes, colors, size):
+    paired_files = {}
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            if '_et_' in filename:
+                prefix = filename.split('_et_')[0]
+                paired_files.setdefault(prefix, {})['et'] = filename
+            elif '_replay_' in filename:
+                prefix = filename.split('_replay_')[0]
+                paired_files.setdefault(prefix, {})['replay'] = filename
+    for fly_id, files in paired_files.items():
+        if 'et' not in files or 'replay' not in files:
+            print(f"Skipping {fly_id}: missing pair")
+            continue
+    
+        nrows = len(lobes) + 1
+        ncols = 2
+        fig, axs, markc = configure_bw_plot(size=size, xaxis=True, nrows=nrows, ncols=ncols)
+        axs = np.array(axs).reshape(nrows, ncols)
+        fig.suptitle(fly_id)
+        
+        data_et = open_pickle(os.path.join(figure_folder, files['et']))
+        data_replay = open_pickle(os.path.join(figure_folder, files['replay']))
+        pv2_et = data_et['strip1']['pv2']
+        pv2_replay = data_replay['strip1']['pv2']
+        d_et, di_et, _ = inside_outside(pv2_et)
+        d_replay, di_replay, _ = inside_outside(pv2_replay)
+        for row_idx, lobe in enumerate(lobes):
+            FF_et = pv2_et[lobe] / 100
+            FF_replay = pv2_replay[lobe] / 100
+            ymin = min(FF_et.min(), FF_replay.min())
+            ymax = max(FF_et.max(), FF_replay.max())
+            # ET plot
+            ax = axs[row_idx][0]
+            ax.plot(pv2_et['relative_time'], FF_et, linewidth=0.5, color=colors[row_idx % len(colors)])
+            add_odor(ax, di_et, ymin, ymax)
+            ax.set_ylim([ymin, ymax])  
+            ax.set_ylabel(lobe, color=markc)
+            # Replay plot
+            ax = axs[row_idx][1]
+            ax.plot(pv2_replay['relative_time'], FF_replay, linewidth=0.5, color=colors[row_idx % len(colors)])
+            add_odor(ax, di_replay, ymin, ymax)
+            ax.set_ylim([ymin, ymax])
+        
+        axs[0, 0].set_title('edge tracking', color=markc)
+        axs[0, 1].set_title('replay', color=markc)    
+
+        # add net motion
+        row_idx = len(lobes)
+        FF_et = pv2_et['net_motion']
+        FF_replay = pv2_replay['net_motion']
+        ymin = min(FF_et.min(), FF_replay.min())
+        ymax = max(FF_et.max(), FF_replay.max())
+
+        ax = axs[row_idx][0]
+        ax.plot(pv2_et['relative_time'], FF_et, linewidth=0.5, color=markc)
+        add_odor(ax, di_et, ymin, ymax)
+        ax.set_ylim([ymin, ymax])
+        ax.set_ylabel('net motion', color=markc)
+
+        ax = axs[row_idx][1]
+        ax.plot(pv2_replay['relative_time'], FF_replay, linewidth=0.5, color=markc)
+        add_odor(ax, di_replay, ymin, ymax)
+        ax.set_ylim([ymin, ymax])
+        plt.tight_layout()
+        plt.show()
+        if not os.path.exists(f'{figure_folder}/fig/traces'):
+            os.makedirs(f'{figure_folder}/fig/traces')
+        fig.savefig(f'{figure_folder}/fig/traces/{fly_id}_et_vs_replay.pdf', bbox_inches='tight')
+
+
+def et_replay_auc_comp(figure_folder, lobes, colors, size):
+    paired_files = {}
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            if '_et_' in filename:
+                prefix = filename.split('_et_')[0]
+                paired_files.setdefault(prefix, {})['et'] = filename
+            elif '_replay_' in filename:
+                prefix = filename.split('_replay_')[0]
+                paired_files.setdefault(prefix, {})['replay'] = filename
+    for fly_id, files in paired_files.items():
+        if 'et' not in files or 'replay' not in files:
+            print(f"Skipping {fly_id}: missing pair")
+            continue
+    
+        nrows = len(lobes)
+        fig, axs, markc = configure_bw_plot(size=size, xaxis=True, nrows=nrows)
+        axs = np.ravel(axs)         
+        fig.suptitle(fly_id)
+        
+        data_et = open_pickle(os.path.join(figure_folder, files['et']))
+        data_replay = open_pickle(os.path.join(figure_folder, files['replay']))
+        pv2_et = data_et['strip1']['pv2']
+        pv2_replay = data_replay['strip1']['pv2']
+        time_et = pv2_et['relative_time']
+        time_replay = pv2_replay['relative_time']
+        d_et, di_et, _ = inside_outside(pv2_et)
+        d_replay, di_replay, _ = inside_outside(pv2_replay)
+
+        aucs_et = {f'G{i+2}': [] for i in range(len(lobes))}
+        aucs_replay = {f'G{i+2}': [] for i in range(len(lobes))}
+
+        for i, lobe in enumerate(lobes):
+            FF_et = pv2_et[lobe] / 100
+            FF_replay = pv2_replay[lobe] / 100
+
+            aucs_et[f'G{i+2}'] = calculate_auc(di_et, time_et, FF_et)
+            aucs_replay[f'G{i+2}'] = calculate_auc(di_replay, time_replay, FF_replay)
+
+            entry_number_et = range(1, len(aucs_et[f'G{i+2}']) + 1)
+            entry_number_replay = range(1, len(aucs_replay[f'G{i+2}']) + 1)
+
+            axs[i].plot(entry_number_et, aucs_et[f'G{i+2}'], color=colors[i % len(colors)], alpha=0.8)
+            axs[i].plot(entry_number_replay, aucs_replay[f'G{i+2}'], color=colors[i % len(colors)], alpha=0.3)
+            axs[i].set_ylabel(lobe, color=markc)
+           
+
+        plt.tight_layout()
+        plt.show()
+        if not os.path.exists(f'{figure_folder}/fig/auc_comp'):
+            os.makedirs(f'{figure_folder}/fig/auc_comp')
+        fig.savefig(f'{figure_folder}/fig/auc_comp/{fly_id}_et_vs_replay_entry_auc.pdf', bbox_inches='tight')
+
+def et_replay_tuning(figure_folder, lobes, colors, size):
+    paired_files = {}
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            if '_et_' in filename:
+                prefix = filename.split('_et_')[0]
+                paired_files.setdefault(prefix, {})['et'] = filename
+            elif '_replay_' in filename:
+                prefix = filename.split('_replay_')[0]
+                paired_files.setdefault(prefix, {})['replay'] = filename
+
+    for fly_id, files in paired_files.items():
+        if 'et' not in files or 'replay' not in files:
+            print(f"Skipping {fly_id}: missing pair")
+            continue
+
+        # Setup 2x4 plot: ET row 0, Replay row 1
+        fig, axs, markc = configure_bw_plot(size=size, xaxis=True, nrows=2, ncols=len(lobes))
+        axs = np.array(axs).reshape(2, len(lobes))
+        fig.suptitle(fly_id)
+
+        # Load data
+        data_et = open_pickle(os.path.join(figure_folder, files['et']))
+        data_replay = open_pickle(os.path.join(figure_folder, files['replay']))
+        df_et = data_et['strip1']['pv2']
+        df_replay = data_replay['strip1']['pv2']
+
+        # Calculate entry angles
+        _, di_et, do_et = inside_outside(df_et)
+        _, di_replay, do_replay = inside_outside(df_replay)
+        entry_et = compute_mean_entry_heading(do_et)
+        entry_replay = compute_mean_entry_heading(do_replay)
+
+        bins = np.arange(-180, 181, 10)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+
+        for row_idx, (df, entry_heading) in enumerate([(df_et, entry_et), (df_replay, entry_replay)]):
+            df = df[df['net_motion'] > 0]  # Restrict to moving
+
+            heading_rad = ((df['heading'] + np.pi) % (2 * np.pi)) - np.pi
+            heading_deg = np.rad2deg(heading_rad)
+
+            for col_idx, lobe in enumerate(lobes):
+                FF = df[lobe] / 100
+                binned_FF = [[] for _ in range(len(bin_centers))]
+
+                for angle, ff_val in zip(heading_deg, FF):
+                    bin_idx = np.digitize(angle, bins) - 1
+                    if 0 <= bin_idx < len(binned_FF):
+                        binned_FF[bin_idx].append(ff_val)
+
+                mean_FF = [np.mean(vals) if vals else np.nan for vals in binned_FF]
+                ax = axs[row_idx, col_idx]
+
+                for j, vals in enumerate(binned_FF):
+                    if vals:
+                        jitter = np.random.uniform(-4, 4, size=len(vals))
+                        ax.scatter(np.full(len(vals), bin_centers[j]), vals,
+                                   color=colors[col_idx], alpha=0.6, s=10)
+
+                ax.plot(bin_centers, mean_FF, color=markc, linestyle='-')
+                ax.set_xlim(-180, 180)
+                ax.set_xticks(np.arange(-180, 181, 60))
+                # ax.axhline(0, color=markc, linestyle='--')
+                ax.axvline(0, color=markc, linestyle='--')
+
+                if entry_heading is not None:
+                    ax.axvline(entry_heading, color='white', linestyle=':', linewidth=1)
+
+                if row_idx == 0:
+                    ax.set_title(f'{lobe} ET', color=markc)
+                else:
+                    ax.set_xlabel('heading (deg)', color=markc)
+                    if col_idx == 0:
+                        ax.set_ylabel('dF/F')
+                    ax.set_title(f'{lobe} replay', color=markc)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.show()
+        if not os.path.exists(f'{figure_folder}/fig/tuning'):
+            os.makedirs(f'{figure_folder}/fig/tuning')
+        fig.savefig(f'{figure_folder}/fig/tuning/{fly_id}_entry_heading_tuning.pdf', bbox_inches='tight')
+
+
+def et_replay_peak_comp(figure_folder, lobes, colors, size):
+    paired_files = {}
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            if '_et_' in filename:
+                prefix = filename.split('_et_')[0]
+                paired_files.setdefault(prefix, {})['et'] = filename
+            elif '_replay_' in filename:
+                prefix = filename.split('_replay_')[0]
+                paired_files.setdefault(prefix, {})['replay'] = filename
+    for fly_id, files in paired_files.items():
+        if 'et' not in files or 'replay' not in files:
+            print(f"Skipping {fly_id}: missing pair")
+            continue
+    
+        nrows = len(lobes)
+        fig, axs, markc = configure_bw_plot(size=size, xaxis=True, nrows=nrows)
+        axs = np.ravel(axs)         
+        fig.suptitle(fly_id)
+        
+        data_et = open_pickle(os.path.join(figure_folder, files['et']))
+        data_replay = open_pickle(os.path.join(figure_folder, files['replay']))
+        pv2_et = data_et['strip1']['pv2']
+        pv2_replay = data_replay['strip1']['pv2']
+        time_et = pv2_et['relative_time']
+        time_replay = pv2_replay['relative_time']
+        d_et, di_et, _ = inside_outside(pv2_et)
+        d_replay, di_replay, _ = inside_outside(pv2_replay)
+
+        peaks_et = {f'G{i+2}': [] for i in range(len(lobes))}
+        peaks_replay = {f'G{i+2}': [] for i in range(len(lobes))}
+
+        for i, lobe in enumerate(lobes):
+            FF_et = pv2_et[lobe] / 100
+            FF_replay = pv2_replay[lobe] / 100
+
+            peaks_et[f'G{i+2}'] = calculate_peak(di_et, time_et, FF_et)
+            peaks_replay[f'G{i+2}'] = calculate_peak(di_replay, time_replay, FF_replay)
+
+            entry_number_et = range(1, len(peaks_et[f'G{i+2}']) + 1)
+            entry_number_replay = range(1, len(peaks_replay[f'G{i+2}']) + 1)
+
+            axs[i].plot(entry_number_et, peaks_et[f'G{i+2}'], color=colors[i % len(colors)], alpha=0.8)
+            axs[i].plot(entry_number_replay, peaks_replay[f'G{i+2}'], color=colors[i % len(colors)], alpha=0.3)
+            axs[i].set_ylabel(lobe, color=markc)
+           
+
+        plt.tight_layout()
+        plt.show()
+        if not os.path.exists(f'{figure_folder}/fig/peaks'):
+            os.makedirs(f'{figure_folder}/fig/peaks')
+        fig.savefig(f'{figure_folder}/fig/peaks/{fly_id}_peaks_per_entry.pdf', bbox_inches='tight')
 
 def oct_trace_FF_bw(figure_folder, neuron, window=(30,360)): 
     for filename in os.listdir(figure_folder):
@@ -415,7 +933,7 @@ def oct_trace_FF_bw(figure_folder, neuron, window=(30,360)):
                 fig.savefig(f'{figure_folder}/fig/trace_FF_bw/{savename}.pdf', bbox_inches='tight')
             plt.show()
 
-def trace_FF_bw_bouts(figure_folder, neuron, pre_post_time=5, separation=1, thresh=None):
+def trace_FF_bw_bouts(figure_folder, neuron, pre_post_time=5, separation=1, thresh=None, oct=True):
     for filename in os.listdir(figure_folder):
         if filename.endswith('.pkl'):
             savename, extension = os.path.splitext(filename)
@@ -423,67 +941,56 @@ def trace_FF_bw_bouts(figure_folder, neuron, pre_post_time=5, separation=1, thre
             pv2, ft2 = process_pickle(img_dict, neuron)
             FF = ft2[neuron]
             time = ft2['relative_time']
-            fig, axs = configure_bw_plot((15, 4), xaxis=True)
-            d, di, do = inside_outside(ft2)
-            
+            fig, axs, markc = configure_bw_plot((15, 4), xaxis=True)
+            if oct == True:
+                d, di, do = inside_outside_oct(ft2)
+            if oct == False:
+                d, di, do = inside_outside(ft2)
             # Create lists to store concatenated traces and times
             concatenated_FF = []
             concatenated_time = []
-            
             current_x = 0  # Initial position on the new x-axis
-            
             # Determine the number of bouts to visualize based on thresh
             if thresh is None:
                 thresh = len(di)  # Use all bouts if thresh is not specified
-            
             # Process only the specified number of bouts
             for i, (key, df) in enumerate(di.items()):
                 if i >= thresh:
                     break  # Stop after the specified number of bouts
-                
                 time_on = df['relative_time'].iloc[0]
                 time_off = df['relative_time'].iloc[-1]
-                
                 # Get the indices for the odor period plus pre and post time
                 start_idx = np.searchsorted(time, time_on - pre_post_time)
                 end_idx = np.searchsorted(time, time_off + pre_post_time)
-                
                 # Extract the corresponding data
                 epoch_FF = FF[start_idx:end_idx]
                 epoch_time = time[start_idx:end_idx] - time[start_idx] + current_x
-                
                 # Concatenate to the lists
                 concatenated_FF.extend(epoch_FF)
                 concatenated_time.extend(epoch_time)
-                
+                # Add NaN to separate this bout from the next one
+                concatenated_FF.append(np.nan)
+                concatenated_time.append(np.nan)
                 # Draw rectangle for the odor period
                 odor_duration = time_off - time_on
                 rectangle = patches.Rectangle((current_x + pre_post_time, (FF.min()-0.1)),
                                               odor_duration, (FF.max() - FF.min() + 0.2),
-                                              facecolor='#ffa700', alpha=0.8)
+                                              facecolor='#ffa700', alpha=0.6)
                 axs.add_patch(rectangle)
                 axs.axvline(x=current_x, color='white', linestyle='--', linewidth=1)
                 axs.axvline(x=current_x + pre_post_time + odor_duration + pre_post_time, color='white', linestyle='--', linewidth=1)
-
                 # Update the current_x position for the next epoch
-                current_x = concatenated_time[-1] + separation
-            
+                current_x = concatenated_time[-2] + separation  # -2 to skip the NaN added at the end
             # Plot the concatenated epochs
             axs.plot(concatenated_time, concatenated_FF, color='white', linewidth=1)
-            
-            #axs.axvline(x=current_x + pre_post_time, color='white', linestyle=':', linewidth=1)
-            #axs.axvline(x=current_x + pre_post_time + odor_duration, color='white', linestyle=':', linewidth=1)
             plt.title(filename, color='white', size=16)
             plt.ylabel(r'$\Delta$F/F', color='white', size=16)
             plt.xlabel('concatenated time (s)', color='white', size=16)
-            
-            # Save the figure
             output_folder = f'{figure_folder}/fig/trace_FF_bw'
             if not os.path.exists(output_folder):
                 os.makedirs(output_folder)
             fig.savefig(f'{output_folder}/{savename}_epochs.pdf', bbox_inches='tight')
             plt.show()
-
 
 
 def triggered_FF(figure_folder, neuron, tbef=30, taf=30, event_type='entry', first = True):
@@ -639,7 +1146,7 @@ def interp_return_FF(figure_folder, neuron):
             mean_trace_interp = np.interp(np.arange(len(mean_trace)), np.arange(len(mean_trace))[~np.isnan(mean_trace)], mean_trace[~np.isnan(mean_trace)])
             std_trace_interp = np.interp(np.arange(len(std_trace)), np.arange(len(std_trace))[~np.isnan(std_trace)], std_trace[~np.isnan(std_trace)])
             t_norm = np.linspace(0, 1, max_len)
-            fig, axs = configure_bw_plot(size=(6,5), xaxis=True)
+            fig, axs, markc = configure_bw_plot(size=(6,5), xaxis=True)
             axs.fill_between(t_norm, mean_trace_interp + std_trace_interp, mean_trace_interp - std_trace_interp, color=color, alpha=0.3)
             axs.plot(t_norm, mean_trace_interp, color=color)
             plt.xlabel('Normalized time', color='white', size=16)
@@ -783,7 +1290,7 @@ def triggered_zFF(figure_folder, neuron, tbef=30, taf=30, event_type='entry', fi
     plt_mn = np.ma.mean(masked_combined_mn_mat, axis=0)
     std = np.ma.std(masked_combined_mn_mat, axis=0)
     t = np.linspace(-tbef, taf, max_len)
-    fig, axs = configure_bw_plot(size=(4, 6), xaxis=True)
+    fig, axs, markc = configure_bw_plot(size=(4, 6), xaxis=True)
     plt.fill_between(t, plt_mn + std, plt_mn - std, color=color, alpha=0.3)
     plt.plot(t, plt_mn, color=color)
     mn = np.min(plt_mn - std)
@@ -792,15 +1299,165 @@ def triggered_zFF(figure_folder, neuron, tbef=30, taf=30, event_type='entry', fi
     plt.plot([0, 0], [-2, 8], color='white', linestyle='--')
     plt.xlabel('time (s)', color='white', size=16)
     plt.ylabel('Z-score', color='white', size=16)
+    figure_folder = f'{figure_folder}/fig/triggered_zFF'
+    if not os.path.exists(figure_folder):
+        os.makedirs(figure_folder)
     if first:
         plt.title(f"first {event_type}", color='white', size=16)
-        fig.savefig(f'{figure_folder}/fig/first_{event_type}_Zscored.pdf', bbox_inches='tight')
+        fig.savefig(f'{figure_folder}/ffirst_{event_type}_Zscored.pdf', bbox_inches='tight')
     if not first:
         plt.title(f"every {event_type}", color='white', size=16)
-        fig.savefig(f'{figure_folder}/fig/every_{event_type}_Zscored.pdf', bbox_inches='tight')
+        fig.savefig(f'{figure_folder}/every_{event_type}_Zscored.pdf', bbox_inches='tight')
     plt.show()
 
-    
+def triggered_zFF_first_two(figure_folder, neuron, tbef=30, taf=30, event_type='entry', plotc='white', oct=True):
+    # Define colors for the first and second events
+    if neuron == 'mbon09':
+        color_first = '#bd33a4'
+        color_second = '#0070C0'  # Example color for the second event
+    elif neuron == 'mbon21':
+        color_first = '#ff4f00'
+        color_second = '#0070C0'
+    elif neuron == 'mbon30':
+        color_first = '#00cc99'
+        color_second = '#0070C0'
+    all_mn_mat_first = []
+    all_mn_mat_second = []
+    max_len_first = 0
+    max_len_second = 0
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            savename, extension = os.path.splitext(filename)
+            img_dict = open_pickle(f'{figure_folder}/{filename}')
+            pv2, ft2 = process_pickle(img_dict, neuron)
+            if pv2 is None or ft2 is None:
+                print(f"Skipping file {filename} due to missing data.")
+                continue
+            FF = ft2[neuron]
+            time = ft2['relative_time']
+            if oct:
+                td = (ft2['mfc3_stpt'] > 0).to_numpy()
+            else:
+                td = ft2['instrip'].to_numpy()
+            tdiff = np.diff(td)
+            # Identify event indices
+            if event_type == 'entry':
+                son = np.where((td[:-1] == False) & (td[1:] == True))[0]
+            elif event_type == 'exit':
+                son = np.where((td[:-1] == True) & (td[1:] == False))[0]
+            if len(son) == 0:
+                print(f"No {event_type} events found in file: {filename}")
+                continue
+            print(f"Found {len(son)} {event_type} events in file: {filename}")
+            tinc = np.mean(np.diff(pv2['relative_time']))
+            idx_bef = int(np.round(float(tbef) / tinc))
+            idx_af = int(np.round(float(taf) / tinc))
+            total_len = idx_bef + idx_af + 1
+            # Process first event
+            if len(son) >= 1:
+                s1 = son[0]
+                idx_array = np.arange(s1 - idx_bef, s1 + idx_af + 1, dtype=int)
+                idx_array_valid = idx_array[(idx_array >= 0) & (idx_array < len(FF))]
+                segment = np.full(total_len, np.nan)
+                valid_len = len(idx_array_valid)
+                segment[:valid_len] = FF[idx_array_valid]
+                # Baseline normalization
+                baseline_indices = np.arange(idx_bef)[(idx_array[:idx_bef] >= 0)]
+                baseline_mean = np.nanmean(segment[baseline_indices])
+                segment -= baseline_mean
+                all_mn_mat_first.append(segment)
+                max_len_first = max(max_len_first, len(segment))
+            # Process second event
+            if len(son) >= 2:
+                s2 = son[1]
+                # Check for overlap between first event's post-event window and second event's pre-event window
+                overlap = (s2 - idx_bef) < (s1 + idx_af)
+                if overlap:
+                    print(f"Second event in file {filename} overlaps with first event's post-event window. Adjusting time windows.")
+                    # Adjust idx_bef for second event
+                    max_idx_bef = s2 - (s1 + idx_af)
+                    if max_idx_bef <= 0:
+                        print(f"Not enough time before second event in file {filename} to prevent overlap. Skipping second event.")
+                        continue
+                    idx_bef_second = max_idx_bef
+                else:
+                    idx_bef_second = idx_bef
+                # Adjust total_len for second event
+                total_len_second = idx_bef_second + idx_af + 1
+                idx_array = np.arange(s2 - idx_bef_second, s2 + idx_af + 1, dtype=int)
+                idx_array_valid = idx_array[(idx_array >= 0) & (idx_array < len(FF))]
+                segment = np.full(total_len_second, np.nan)
+                valid_len = len(idx_array_valid)
+                segment[:valid_len] = FF[idx_array_valid]
+                # Baseline normalization
+                baseline_indices = np.arange(idx_bef_second)[(idx_array[:idx_bef_second] >= 0)]
+                baseline_mean = np.nanmean(segment[baseline_indices])
+                segment -= baseline_mean
+                all_mn_mat_second.append(segment)
+                max_len_second = max(max_len_second, len(segment))
+    if len(all_mn_mat_first) == 0 and len(all_mn_mat_second) == 0:
+        print(f"No {event_type} events found in any file.")
+        return
+    # Prepare time vectors
+    t_first = np.linspace(-tbef, taf, max_len_first)
+    t_second = np.linspace(-tbef, taf, max_len_second)
+    if plotc == 'white':
+        fig, axs, markc = configure_white_plot(size=(4,5), xaxis=True)
+    elif plotc == 'black':
+        fig, axs, markc = configure_bw_plot(size=(4,5), xaxis=True)
+    if len(all_mn_mat_first) > 0:
+        padded_mn_mat_first = []
+        for segment in all_mn_mat_first:
+            if len(segment) < max_len_first:
+                padding = np.full(max_len_first - len(segment), np.nan)
+                segment = np.hstack((segment, padding))
+            padded_mn_mat_first.append(segment)
+        combined_mn_mat_first = np.vstack(padded_mn_mat_first)
+        masked_combined_mn_mat_first = np.ma.masked_array(combined_mn_mat_first, np.isnan(combined_mn_mat_first))
+        for trace in masked_combined_mn_mat_first:
+            axs.plot(t_first, trace, color=color_first, alpha=0.5, linewidth=0.8)  # Set alpha and linewidth for better visibility
+        plt_mn_first = np.ma.mean(masked_combined_mn_mat_first, axis=0)
+        axs.plot(t_first, plt_mn_first, color=color_first, label='first entry', linewidth=2)
+    if len(all_mn_mat_second) > 0:
+        # Pad sequences for the second events
+        padded_mn_mat_second = []
+        for segment in all_mn_mat_second:
+            if len(segment) < max_len_second:
+                padding = np.full(max_len_second - len(segment), np.nan)
+                segment = np.hstack((segment, padding))
+            padded_mn_mat_second.append(segment)
+        combined_mn_mat_second = np.vstack(padded_mn_mat_second)
+        masked_combined_mn_mat_second = np.ma.masked_array(combined_mn_mat_second, np.isnan(combined_mn_mat_second))
+        for trace in masked_combined_mn_mat_second:
+            axs.plot(t_second, trace, color=color_second, alpha=0.5, linewidth=0.8)  # Set alpha and linewidth for better visibility
+        plt_mn_second = np.ma.mean(masked_combined_mn_mat_second, axis=0)
+        axs.plot(t_second, plt_mn_second, color=color_second, label='second entry', linewidth=2)
+    # Adjust y-axis limits and plot vertical line at x=0
+    ymin, ymax = axs.get_ylim()
+    if plotc == 'white':
+        axs.plot([0, 0], [ymin, ymax], color='black', linestyle='--')
+    elif plotc == 'black':
+        axs.plot([0, 0], [ymin, ymax], color='white', linestyle='--')
+    # Set labels and legend
+    axs.set_xlabel('time (s)', fontsize=16)
+    if plotc == 'white':
+        axs.set_ylabel(r'$\Delta$F/F', color='black', size=16)
+    if plotc == 'black':
+        axs.set_ylabel(r'$\Delta$F/F', color='white', size=16)
+    # plt.legend()
+    plt.tight_layout()
+
+    # Save and show the figure
+    figure_output_folder = f'{figure_folder}/fig/triggered_zFF'
+    if not os.path.exists(figure_output_folder):
+        os.makedirs(figure_output_folder)
+    if plotc == 'white':
+        fig.savefig(f'{figure_output_folder}/first_second_{event_type}_baseline_normalized.pdf', bbox_inches='tight')
+    elif plotc == 'black':
+        fig.savefig(f'{figure_output_folder}/first_second_{event_type}_baseline_normalized_bw.pdf', bbox_inches='tight')
+    plt.show()
+
+
 def FF_xpos_corr(figure_folder, neuron):
     if neuron == 'mbon09':
         color = '#bd33a4'
@@ -1081,6 +1738,135 @@ def FF_time_corr(figure_folder, neuron):
     plt.show()
     fig.savefig(f'{figure_folder}/fig/FF_time_corr.pdf', bbox_inches='tight')
 
+def peak_FF_heading_vs_entry_angle(figure_folder, neuron):
+    if neuron == 'mbon09':
+        color = '#bd33a4'
+    elif neuron == 'mbon21':
+        color = '#ff4f00'
+    elif neuron == 'mbon30':
+        color = '#00cc99'
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            savename, extension = os.path.splitext(filename)
+            img_dict = open_pickle(f'{figure_folder}/{filename}')
+            pv2, ft2 = process_pickle(img_dict, neuron)
+            FF = ft2[neuron]
+            time = ft2['relative_time']
+            d, di, do = inside_outside(ft2)
+            FF = ft2[neuron]
+            time = ft2['relative_time']
+            bouts = []
+            entry_angles = []
+            peak_FF_headings = []
+            fig, axs, markc = configure_bw_plot(size=(10,5), xaxis=True)
+            for i, (key, df) in enumerate(do.items()):
+                if i == 0:
+                    continue  # Skip the first bout
+                if df['relative_time'].iloc[-1] - df['relative_time'].iloc[0] > 0.5:
+                    exit_bout = key
+                    entry_bout = exit_bout - 1
+                    if entry_bout in di:
+                        bouts.append((exit_bout, entry_bout))
+            # print(bouts)
+            for exit_bout, entry_bout in bouts:
+                entry_data = di[entry_bout]
+                entry_window = entry_data[(entry_data['relative_time'] - entry_data['relative_time'].iloc[0]) <= 0.5]
+                entry_angle = entry_window['ft_heading'].mean()
+                entry_angles.append(entry_angle * (180 / np.pi))
+ 
+                exit_data = do[exit_bout]
+                peak_index = FF[exit_data.index].idxmax()
+                peak_time = time.loc[peak_index]
+                peak_window = exit_data[(exit_data['relative_time'] >= peak_time - 0.5) & (exit_data['relative_time'] <= peak_time + 0.5)]
+                peak_heading = peak_window['ft_heading'].mean()
+                peak_FF_headings.append(peak_heading * (180 / np.pi))
+            print(entry_angles)
+            print(peak_FF_headings)
+            bouts_range = range(len(entry_angles))
+            axs.plot(bouts_range, entry_angles, label="entry angle", linestyle='-', color='red')
+            axs.plot(bouts_range, peak_FF_headings, label="heading at peak dF/F in subsequent exit", linestyle='--', color='blue')
+            axs.set_xticks(bouts_range)
+            axs.set_xticklabels([str(i) for i in bouts_range], rotation=0)
+            axs.set_title(filename, color=markc)
+            axs.set_xlabel('bout')
+            axs.set_ylabel('angle (degrees)')
+            axs.legend()    
+            # Save and display the plot
+            plt.tight_layout()            
+            plt.show()
+            if not os.path.exists(f'{figure_folder}/fig/heading_entry_corr'):
+                os.makedirs(f'{figure_folder}/fig/heading_entry_corr')
+            fig.savefig(f'{figure_folder}/fig/heading_entry_corr/heading_entry_corr.pdf', bbox_inches='tight')
+
+def peak_FF_heading_vs_entry_angle_corr(figure_folder, neuron):
+    if neuron == 'mbon09':
+        color = '#bd33a4'
+    elif neuron == 'mbon21':
+        color = '#ff4f00'
+    elif neuron == 'mbon30':
+        color = '#00cc99'
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            savename, extension = os.path.splitext(filename)
+            img_dict = open_pickle(f'{figure_folder}/{filename}')
+            pv2, ft2 = process_pickle(img_dict, neuron)
+            FF = ft2[neuron]
+            time = ft2['relative_time']
+            d, di, do = inside_outside(ft2)
+            FF = ft2[neuron]
+            time = ft2['relative_time']
+            bouts = []
+            entry_angles = []
+            peak_FF_headings = []
+            fig, axs, markc = configure_bw_plot(size=(10,5), xaxis=True)
+            for i, (key, df) in enumerate(do.items()):
+                if i == 0:
+                    continue  # Skip the first bout
+                if df['relative_time'].iloc[-1] - df['relative_time'].iloc[0] > 0.5:
+                    exit_bout = key
+                    entry_bout = exit_bout - 1
+                    if entry_bout in di:
+                        bouts.append((exit_bout, entry_bout))
+            # print(bouts)
+            for exit_bout, entry_bout in bouts:
+                entry_data = di[entry_bout]
+                entry_window = entry_data[(entry_data['relative_time'] - entry_data['relative_time'].iloc[0]) <= 0.5]
+                entry_angle = entry_window['ft_heading'].mean()
+                entry_angles.append(entry_angle * (180 / np.pi))
+ 
+                exit_data = do[exit_bout]
+                peak_index = FF[exit_data.index].idxmax()
+                peak_time = time.loc[peak_index]
+                peak_window = exit_data[(exit_data['relative_time'] >= peak_time - 0.5) & (exit_data['relative_time'] <= peak_time + 0.5)]
+                peak_heading = peak_window['ft_heading'].mean()
+                peak_FF_headings.append(peak_heading * (180 / np.pi))
+            
+            axs.scatter(entry_angles, peak_FF_headings, color='blue', label='Bout Pairs', alpha=0.7)
+
+            # Add labels to each scatter point
+            for i, (x, y) in enumerate(zip(entry_angles, peak_FF_headings)):
+                axs.annotate(f'{i}', (x, y), textcoords="offset points", xytext=(5, 5), ha='center', fontsize=8)
+
+            # Set axis labels and title
+            axs.set_title(f"Entry Angle vs Peak FF Heading ({filename})")
+            axs.set_xlabel('Entry Angle (degrees)')
+            axs.set_ylabel('Peak FF Heading (degrees)')
+
+            # Ensure the y-axis range matches degrees
+            axs.set_xlim([-180, 180])  # Adjust range to match data
+            axs.set_ylim([-180, 180])  # Adjust range to match data
+            axs.axhline(0, color='gray', linestyle='--', linewidth=0.5)  # Add horizontal line at y=0
+            axs.axvline(0, color='gray', linestyle='--', linewidth=0.5)  # Add vertical line at x=0
+            axs.legend()
+
+            # Save and display the plot
+            plt.tight_layout()
+            plt.show()
+
+            if not os.path.exists(f'{figure_folder}/fig/heading_entry_corr'):
+                os.makedirs(f'{figure_folder}/fig/heading_entry_corr')
+            fig.savefig(f'{figure_folder}/fig/heading_entry_corr/entry_vs_peak_scatter.pdf', bbox_inches='tight')
+
 def FF_peaks(figure_folder, neuron):
     # Define neuron-specific colors
     if neuron == 'mbon09':
@@ -1254,7 +2040,67 @@ def inbound_outbound_FF(figure_folder, neuron, window=6):
                 os.makedirs(f'{figure_folder}/fig/inbound_outbound_FF')
             fig.savefig(f'{figure_folder}/fig/inbound_outbound_FF/{savename}_{window}.pdf', bbox_inches='tight')
             
-def FF_tuning(figure_folder, neuron, met):
+# def FF_tuning(figure_folder, neuron):
+#     if neuron == 'mbon09':
+#         color = '#bd33a4'
+#     elif neuron == 'mbon21':
+#         color = '#ff4f00'
+#     elif neuron == 'mbon30':
+#         color = '#00cc99'
+        
+#     all_entry_angles = []
+#     bins = np.arange(-180, 181, 10)  # 10-degree bins from 0 to 360
+#     bin_centers = (bins[:-1] + bins[1:]) / 2
+#     binned_FF = np.zeros(len(bin_centers))
+
+#     for filename in os.listdir(figure_folder):
+#         if filename.endswith('.pkl'):
+#             fig, axs, markc = configure_bw_plot(size=(6,5), xaxis=True)
+#             savename, extension = os.path.splitext(filename)
+#             img_dict = open_pickle(f'{figure_folder}/{filename}')
+#             pv2, ft2 = process_pickle(img_dict, neuron)
+#             ft2 = calculate_trav_dir(ft2)
+#             ft2['trav_dir'] = np.rad2deg(ft2['trav_dir'])
+#             FF = ft2[neuron]
+#             heading = ((ft2['ft_heading'] + math.pi) % (2 * math.pi)) - math.pi
+#             ft2['transformed_heading'] = heading
+#             # ft2['transformed_heading'] = np.rad2deg(heading)
+#             ft2 = ft2.replace([np.inf, -np.inf], np.nan).dropna()
+#             d, di, do = inside_outside(ft2)
+
+#             entry_headings = []
+#             for key, df in di.items():
+#                 if df['relative_time'].iloc[-1] - df['relative_time'].iloc[0] >= 1:
+#                     df = get_last_second(df)
+#                     entry_angle = circmean_heading(df, entry_headings) # append entry angle to list
+#             entry_angle = np.mean(np.rad2deg(np.array(entry_headings)))  
+#             print(entry_angle)
+#             all_entry_angles.append(entry_angle)  
+                    
+#             for i in range(len(bins) - 1):
+#                 mask = (np.rad2deg(ft2['transformed_heading']) >= bins[i]) & (np.rad2deg(ft2['transformed_heading']) < bins[i + 1])
+#                 mask = mask.reindex(FF.index, fill_value=False)  # Align mask with FF index
+#                 FF_masked = FF[mask]
+#                 if not FF_masked.empty:
+#                     binned_FF[i] = FF_masked.mean()
+#                 else:
+#                     binned_FF[i] = np.nan  # Handle the case with no values
+            
+#             plt.plot(bin_centers, binned_FF, linestyle='-', color=color)
+#             plt.axvline(x=entry_angle, color=markc, linestyle='--')
+#             plt.xlabel('heading (degrees)')
+#             plt.ylabel('dF/F')
+#             plt.title(f'{neuron} - {savename}', color=markc)
+#             plt.xlim(-180, 180)
+#             plt.xticks(np.arange(-180, 181, 60))
+#             plt.tight_layout()
+
+#             plt.show()
+#             if not os.path.exists(f'{figure_folder}/fig/tuning'):
+#                 os.makedirs(f'{figure_folder}/fig/tuning')
+#             fig.savefig(f'{figure_folder}/fig/tuning/{savename}.pdf', bbox_inches='tight', facecolor='black')
+
+def FF_tuning(figure_folder, neuron):
     if neuron == 'mbon09':
         color = '#bd33a4'
     elif neuron == 'mbon21':
@@ -1262,95 +2108,70 @@ def FF_tuning(figure_folder, neuron, met):
     elif neuron == 'mbon30':
         color = '#00cc99'
         
-    all_binned_FF = []  # List to store binned FF data across all files
-    all_entry_headings = []  # List to store entry headings across all files
-    
+    bins = np.arange(-180, 181, 10)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+
     for filename in os.listdir(figure_folder):
         if filename.endswith('.pkl'):
-            fig, axs = configure_bw_plot(size=(6,5), xaxis=True)
-            savename, extension = os.path.splitext(filename)
+            fig, ax, markc = configure_bw_plot(size=(4, 3), xaxis=True)
+            savename, _ = os.path.splitext(filename)
             img_dict = open_pickle(f'{figure_folder}/{filename}')
             pv2, ft2 = process_pickle(img_dict, neuron)
             ft2 = calculate_trav_dir(ft2)
             ft2['trav_dir'] = np.rad2deg(ft2['trav_dir'])
+
             FF = ft2[neuron]
-            heading = ((ft2['ft_heading']+math.pi) % (2*math.pi))-math.pi
-            ft2['transformed_heading'] = np.rad2deg(heading)
+            heading_rad = ((ft2['ft_heading'] + np.pi) % (2 * np.pi)) - np.pi
+            heading_deg = np.rad2deg(heading_rad)
+            ft2['transformed_heading'] = heading_deg
+
             ft2 = ft2.replace([np.inf, -np.inf], np.nan).dropna()
             d, di, do = inside_outside(ft2)
-            bout_means = []
-            for key, df in di.items():
-                if df['relative_time'].iloc[-1] - df['relative_time'].iloc[0] >= 0.5:
-                    df = get_last_second(df)
-                    if met == "traveling direction":
-                        angles = np.abs(df['trav_dir'])
-                    elif met == "heading":
-                        angles = np.abs(df['transformed_heading'])
-                    bout_means.extend(angles.tolist())
-            bins = np.arange(0, 181, 10)  # 10-degree bins from 0 to 180
-            bin_centers = (bins[:-1] + bins[1:]) / 2
-            binned_FF = np.zeros(len(bin_centers))
 
-            for i in range(len(bins) - 1):
-                if met == "traveling direction":
-                    mask = (ft2['trav_dir'] >= bins[i]) & (ft2['trav_dir'] < bins[i + 1])
-                elif met == "heading":
-                    mask = (ft2['transformed_heading'] >= bins[i]) & (ft2['transformed_heading'] < bins[i + 1])
-                mask = mask.reindex(FF.index, fill_value=False)  # Align mask with FF index
-                FF_masked = FF[mask]
-                if not FF_masked.empty:
-                    binned_FF[i] = FF_masked.mean()
-                else:
-                    binned_FF[i] = np.nan  # Handle the case with no values
-            
-            # Store the binned FF data for summarizing later
-            all_binned_FF.append(binned_FF)
-            # Calculate the mean entry heading and store it for the summary plot
-            mean_entry_heading = circular_mean(bout_means)
-            all_entry_headings.append(mean_entry_heading)
-            # Plot individual fly's data
-            axs.axvline(x=mean_entry_heading, color='white', linestyle='-', linewidth=2)
-            axs.plot(bin_centers, binned_FF, color=color, linestyle='-')
-            axs.set_xlabel(f'{met}', color='white')
-            axs.set_ylabel(r' mean $\Delta F/F$', color='white')
-            if met == 'traveling direction':
-                axs.set_title(r'$\Delta F/F$ across traveling directions', color='white')
-            elif met == "heading":
-                axs.set_title(r'$\Delta F/F$ across headings', color='white')
-            plt.title(savename, color='white')
+            entry_headings = []
+            for key, df in di.items():
+                if df['relative_time'].iloc[-1] - df['relative_time'].iloc[0] >= 1:
+                    df = get_last_second(df)
+                    angle = circmean_heading(df, entry_headings)
+            entry_angle = np.mean(np.rad2deg(np.array(entry_headings)))
+            print(entry_angle)
+
+            # Bin FF values
+            binned_FF = [[] for _ in range(len(bin_centers))]
+            for angle, ff_val in zip(heading_deg, FF):
+                if np.isfinite(ff_val):  # Only use valid (non-NaN, non-inf) values
+                    bin_idx = np.digitize(angle, bins) - 1
+                    if 0 <= bin_idx < len(binned_FF):
+                        binned_FF[bin_idx].append(ff_val)
+            mean_FF = [np.mean(vals) if vals else np.nan for vals in binned_FF]
+            mean_FF = pd.Series(mean_FF).interpolate(limit_direction='both').tolist()
+
+            # Scatter plot with jitter
+            for j, vals in enumerate(binned_FF):
+                if vals:
+                    jitter = np.random.uniform(-4, 4, size=len(vals))
+                    ax.scatter(np.full(len(vals), bin_centers[j]), vals, color=color, alpha=0.6, s=10)
+
+            # Mean FF line
+            ax.plot(bin_centers, mean_FF, color=markc, linestyle='-')
+
+            # Axes and annotations
+            ax.axvline(entry_angle, color=markc, linestyle=':', linewidth=1)
+            ax.axvline(0, color=markc, linestyle='--', linewidth=1)
+            # ax.axhline(0, color=markc, linestyle='--', linewidth=1)
+            ax.set_xlabel('heading (deg)')
+            ax.set_ylabel('dF/F')
+            ax.set_xlim(-180, 180)
+            ax.set_xticks(np.arange(-180, 181, 60))
+            ax.set_title(f'{neuron} - {savename}', color=markc)
+
+            plt.tight_layout()
             plt.show()
+            if not os.path.exists(f'{figure_folder}/fig/tuning'):
+                os.makedirs(f'{figure_folder}/fig/tuning')
+            fig.savefig(f'{figure_folder}/fig/tuning/{savename}.pdf', bbox_inches='tight', facecolor='black')
+
             
-            if not os.path.exists(f'{figure_folder}/fig/FF_tuning'):
-                os.makedirs(f'{figure_folder}/fig/FF_tuning')
-            fig.savefig(f'{figure_folder}/fig/FF_tuning/{savename}_{met}.pdf', bbox_inches='tight')
-    
-    # Summarize all flies in one plot
-    if all_binned_FF:
-        all_binned_FF = np.array(all_binned_FF)
-        mean_binned_FF = np.nanmean(all_binned_FF, axis=0)
-        
-        # Calculate the overall mean entry heading
-        overall_mean_entry_heading = circular_mean(all_entry_headings)
-        fig, axs = configure_bw_plot(size=(6, 5), xaxis=True)
-        axs.plot(bin_centers, mean_binned_FF, color=color, linestyle='-')
-        axs.axhline(y=0, color='white', linestyle='--', linewidth=.5)  # Horizontal dotted line at y=0
-        axs.axvline(x=90, color='white', linestyle='--', linewidth=.5)
-        
-        # Add the overall mean entry heading
-        axs.axvline(x=overall_mean_entry_heading, color='white', linestyle='-', linewidth=2)
-        
-        axs.set_xlabel(f'{met}', color='white')
-        axs.set_ylabel(r' mean $\Delta F/F$', color='white')
-        if met == 'traveling direction':
-                axs.set_title(r'$\Delta F/F$ across traveling directions', color='white')
-        elif met == "heading":
-            axs.set_title(r'$\Delta F/F$ across headings', color='white')
-        plt.show()
-        
-        summary_folder = f'{figure_folder}/fig/FF_tuning_summary'
-        if not os.path.exists(summary_folder):
-            os.makedirs(summary_folder)
-        fig.savefig(f'{summary_folder}/summary_{neuron}_{met}.pdf', bbox_inches='tight')
 
 
 
@@ -1364,8 +2185,8 @@ def traj_FF(figure_folder, neuron):
             y = ft2['ft_posy']
             x, y = fictrac_repair(x, y)
             colour = ft2[neuron].to_numpy().flatten()
-            cmin = np.round(np.percentile(colour[~np.isnan(colour)], 5), decimals=1)  
-            cmax = np.round(np.percentile(colour[~np.isnan(colour)], 95), decimals=1) 
+            cmin = np.round(np.percentile(colour[~np.isnan(colour)], 1), decimals=1)  
+            cmax = np.round(np.percentile(colour[~np.isnan(colour)], 99), decimals=1) 
             xrange = np.max(x) - np.min(x)
             yrange = np.max(y) - np.min(y)
             mrange = np.max([xrange, yrange]) + 100
@@ -1374,8 +2195,10 @@ def traj_FF(figure_folder, neuron):
             ylims = [y_med - mrange / 2, y_med + mrange / 2]
             xlims = [x_med - mrange / 2, x_med + mrange / 2]
             FFs = [x_med - mrange / 2, x_med + mrange / 2]
-            acv = ft2['instrip']
-            inplume = acv > 0
+            if (ft2['mfc2_stpt'] == 0).all():
+                inplume = ft2.mfc3_stpt>0
+            if (ft2['mfc3_stpt'] == 0).all():
+                inplume = ft2.mfc2_stpt>0
             c_map = plt.get_cmap('coolwarm')
             cnorm = mpl.colors.Normalize(vmin=cmin, vmax=cmax)
             scalarMap = cm.ScalarMappable(norm=cnorm, cmap=c_map)
@@ -1414,7 +2237,8 @@ def traj_FF(figure_folder, neuron):
             fig.savefig(f'{figure_folder}/fig/traj_FF/{savename}.pdf', bbox_inches='tight', facecolor='black')
             plt.show()
 
-
+# def AS_DA_tone:
+    
 
 # def plot_FF_trajectory(figure_folder, filename, lobes, colors, strip_width, strip_length, FF, ylim, hlines=[], save=False, keyword=None):
 #     data = open_pickle(filename)

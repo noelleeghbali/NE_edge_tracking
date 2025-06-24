@@ -13,7 +13,7 @@ from scipy import signal as sg
 import sys
 import pickle
 
-datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON30/240810/F2/T1')
+datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON30/241119/F1/T2')
 savedir = os.path.join('/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON30/picklez')
 d = datadir.split(os.path.sep)
 name = d[-3] + '_' + d[-2] + '_' + d[-1]
@@ -24,7 +24,7 @@ ex = im.fly(name, datadir)
 ex.register_all_images(overwrite=True)
 ex.z_projection()
 # %% Masks for ROI drawing
-ex.mask_slice = {'All': [1, 2, 3, 4, 5]}
+ex.mask_slice = {'All': [1, 2, 3, 4]}
 ex.t_projection_mask_slice()
 # %%
 cx = CX(name, ['mbon30'], datadir)

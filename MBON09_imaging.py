@@ -7,7 +7,7 @@ from analysis_funs.CX_imaging import CX
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from src.utilities import imaging as im
+from analysis_funs.utilities import imaging as im
 from skimage import io, data, registration, filters, measure
 from scipy import signal as sg
 import sys

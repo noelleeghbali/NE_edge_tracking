@@ -1,4 +1,3 @@
-
 from imaging_analysis import *
 from behavior_analysis import *
 from analysis_funs.regression import fci_regmodel
@@ -13,33 +12,35 @@ from scipy import signal as sg
 import sys
 import pickle
 
-figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21/picklez/acv_pulses'
-neuron = 'mbon21'
+figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/mbon09/picklez/oct_pulses'
+neuron = 'mbon09'
 #rebaseline(figure_folder, neuron, span=500)
-
-
-#Fluorescence trace over experiment
-#trace_FF_bw(figure_folder, neuron, window=None)
-# trace_FF_bw_bouts(figure_folder, neuron, pre_post_time=2, separation=2, thresh=30)
-# dF_entries_bw(figure_folder, neuron, thresh=30, sign='pos')
-# dF_entries_time_bw(figure_folder, neuron, thresh=30, sign='pos')
-# entry_auc_bw(figure_folder, neuron, unit_time=True, thresh=40)
-# interp_jump_FF(figure_folder, neuron)
-stacked_FF(figure_folder, neuron)
+# peak_FF_heading_vs_entry_angle(figure_folder, neuron)
+# trace_FF_bw(figure_folder, neuron, window=None)
+# trace_FF_bw_bouts(figure_folder, neuron, pre_post_time=2, separation=2, thresh=10, oct=False)
+# dF_entries_bw(figure_folder, neuron, thresh=20, sign='pos')
+# dF_entries_time_bw(figure_folder, neuron, thresh=20, sign='pos')
+# entry_auc_bw(figure_folder, neuron, unit_time=True, thresh=15, oct=False)
+# entry_peaks_first_two(figure_folder, neuron, thresh=2, plotc='black', oct=False)
+# entry_peaks_first_ten(figure_folder, neuron, thresh=10, plotc='black', oct=False)
+# interp_return_FF(figure_folder, neuron)
+# stacked_FF(figure_folder, neuron)
 
 # Triggered average fluorescence at entry and exit
-# triggered_FF(figure_folder, neuron, tbef=10, taf=10, event_type='entry', first=True)
+# triggered_FF(figure_folder, neuron, tbef=6, taf=6, event_type='exit', first=False)
 # triggered_FF(figure_folder, neuron, tbef=10, taf=10, event_type='entry', first=False)
 # triggered_zFF(figure_folder, neuron, tbef=10, taf=10, event_type='entry', first=True)
+# triggered_zFF(figure_folder, neuron, tbef=5, taf=5, event_type='entry', first=False)
 # triggered_zFF(figure_folder, neuron, tbef=10, taf=10, event_type='entry', first=False)
-# triggered_zFF(figure_folder, neuron, tbef=10, taf=10, event_type='exit', first=True)
 # triggered_zFF(figure_folder, neuron, tbef=10, taf=10, event_type='exit', first=False)
+# triggered_zFF_first_two(figure_folder, neuron, tbef=5, taf=5, event_type='exit', plotc='black', oct=False)
+# triggered_zFF_first_two(figure_folder, neuron, tbef=5, taf=5, event_type='entry', plotc='black', oct=False)
 
 
 
 # Trajectory w/ fluorescence colormap
 # traj_FF(figure_folder, neuron)
-# FF_tuning(figure_folder, neuron, 'traveling direction')
+FF_tuning(figure_folder, neuron)
 # FF_time_corr(figure_folder, neuron)
 #FF_xpos_corr(figure_folder, neuron)
 #inbound_outbound_FF(figure_folder, neuron, window=1)
