@@ -16,6 +16,9 @@ flylist = np.array(list(data.keys())) # list of flies in the pickle
 print(len(flylist))
 for fly in flylist:
     flydf = data[fly]['a1'] # dataframe for each fly
+    print(list(flydf.columns))
+
+#%%
     d, di, do = inside_outside(flydf)
     first_on_index = flydf[flydf['instrip']].index[0]
     exp_df = flydf.loc[first_on_index:]
@@ -41,7 +44,7 @@ for fly in flylist:
     plt.show()
     if not os.path.exists(f'{figure_folder}/fig/traces'):
         os.makedirs(f'{figure_folder}/fig/traces')
-    fig.savefig(f'{figure_folder}/fig/traces/{fly}_trace', bbox_inches='tight')
+    fig.savefig(f'{figure_folder}/fig/traces/{fly}_trace.pdf', bbox_inches='tight')
 
 #%% trajectories
 
@@ -392,7 +395,6 @@ for fly in flylist:
 
 
 # %% compare peak in activity at entry w/ efficiency of subsequent return (PER FLY)
-
 data = open_pickle(filename)
 flylist = np.array(list(data.keys())) # list of flies in the pickle
 summary_aucs = {f'G{i+2}': [] for i in range(len(lobes))}
@@ -426,7 +428,7 @@ for fly in flylist:
             if return_key in do:
                 return_df = do[return_key]
                 bout_dur = return_df['relative_time'].iloc[-1] - return_df['relative_time'].iloc[0]
-                if bout_dur >= 0.5 and return_to_edge(return_df):
+                if 0.5 <= bout_dur <= 30 and return_to_edge(return_df):
                     pl = get_a_bout_calc(return_df, 'path_length')
                     dist = get_a_bout_calc(return_df, 'furthest_distance_from_plume')
                     print('calculating return efficiency')
@@ -434,13 +436,9 @@ for fly in flylist:
                         return_eff = dist / pl
                         aucs.append(auc_value)
                         return_efficiencies.append(return_eff)
-        # axs[i].scatter(aucs, return_efficiencies, color=colors[i], alpha=0.8)
-        # axs[i].set_title(lobes[i])
-        
+
         x = np.array(aucs)
         y = np.array(return_efficiencies)
-
-        # Remove NaNs/Infs
         mask = np.isfinite(x) & np.isfinite(y)
         x_clean, y_clean = x[mask], y[mask]
         
@@ -476,6 +474,135 @@ for fly in flylist:
                 print(f"Linear regression failed for lobe {lobes[i]} due to matrix error.")
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # Reserve top 5% for the suptitle
     plt.suptitle(fly, fontsize=14)
+
+
+#%%
+
+data = open_pickle(filename)
+flylist = np.array(list(data.keys()))  # list of flies in the pickle
+summary_aucs = {f'G{i+2}': [] for i in range(len(lobes))}
+summary_return_eff = {f'G{i+2}': [] for i in range(len(lobes))}
+
+for fly in flylist:
+    fig, axs, markc = configure_bw_plot(size=(12, 3.5), xaxis=True, ncols=len(lobes))
+    flydf = data[fly]['a1']
+    d, di, do = inside_outside(flydf)
+    time = flydf['relative_time']
+    entry_key_dict = {f'G{i+2}': [] for i in range(len(lobes))}  # bout IDs
+
+    for i, lobe in enumerate(lobes):
+        FF = flydf[lobe]
+        time = flydf['relative_time']
+        aucs = []
+        return_efficiencies = []
+
+        for key, entry_df in di.items():
+            time_on = entry_df['relative_time'].iloc[0]
+            time_off = entry_df['relative_time'].iloc[-1]
+            baseline_mask = (time >= time_on - 0.5) & (time < time_on)
+            interval_mask = (time >= time_on) & (time <= time_off)
+            if baseline_mask.sum() == 0 or interval_mask.sum() == 0:
+                continue
+            baseline = FF[baseline_mask].mean()
+            FF_adjusted = FF[interval_mask] - baseline
+            auc = FF_adjusted.max()  # Using peak ΔF/F instead of integral
+            # auc = np.trapz(FF_adjusted, time[interval_mask])
+            auc_value = auc
+            print('calculating peak df/f')
+
+            # Match to corresponding return bout using key + 1
+            return_key = key + 1
+            if return_key in do:
+                return_df = do[return_key]
+                bout_dur = return_df['relative_time'].iloc[-1] - return_df['relative_time'].iloc[0]
+                if 2 <= bout_dur <= 30 and return_to_edge(return_df):
+                    pl = get_a_bout_calc(return_df, 'path_length')
+                    dist = get_a_bout_calc(return_df, 'furthest_distance_from_plume')
+                    print('calculating return efficiency')
+                    if pl > 0:
+                        return_eff = dist / pl
+                        aucs.append(auc_value)
+                        return_efficiencies.append(return_eff)
+
+        x = np.array(aucs)
+        y = np.array(return_efficiencies)
+
+        # Remove NaNs/Infs
+        mask = np.isfinite(x) & np.isfinite(y)
+        x_clean, y_clean = x[mask], y[mask]
+
+        axs[i].scatter(x_clean, y_clean, color=colors[i], alpha=0.8)
+        axs[i].set_title(lobes[i])
+        axs[i].set_xlabel('peak dF/F', color=markc, fontsize=14)
+        axs[0].set_ylabel('return efficiency', color=markc, fontsize=14)
+
+        if len(x_clean) >= 3 and not np.all(x_clean == x_clean[0]):
+            try:
+                coeffs = np.polyfit(x_clean, y_clean, 1)
+                fit_fn = np.poly1d(coeffs)
+                y_pred = fit_fn(x_clean)
+                r_squared = 1 - np.sum((y_clean - y_pred)**2) / np.sum((y_clean - np.mean(y_clean))**2)
+
+                # Only apply linear model if R² is decent
+                if r_squared >= 0.3:
+                    x_fit = np.linspace(min(x_clean), max(x_clean), 100)
+                    axs[i].plot(x_fit, fit_fn(x_fit), linestyle='--', color=markc)
+                    axs[i].text(0.05, 0.95, f'$R^2 = {r_squared:.2f}$',
+                                transform=axs[i].transAxes,
+                                verticalalignment='top',
+                                fontsize=12,
+                                color=markc)
+
+            except np.linalg.LinAlgError:
+                print(f"Linear regression failed for lobe {lobes[i]} due to matrix error.")
+
+        # Store data for summary
+        summary_aucs[f'G{i+2}'].extend(x_clean)
+        summary_return_eff[f'G{i+2}'].extend(y_clean)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Reserve top 5% for the suptitle
+    plt.suptitle(fly, fontsize=14)
+
+# ---- SUMMARY PLOT ACROSS ALL FLIES ----
+fig_sum, axs_sum, markc = configure_bw_plot(size=(12, 3.5), xaxis=True, ncols=len(lobes))
+for i, lobe in enumerate(lobes):
+    x = np.array(summary_aucs[f'G{i+2}'])
+    y = np.array(summary_return_eff[f'G{i+2}'])
+    mask = np.isfinite(x) & np.isfinite(y)
+    x_clean, y_clean = x[mask], y[mask]
+
+    axs_sum[i].scatter(x_clean, y_clean, color=colors[i], alpha=0.6)
+    axs_sum[i].set_title(f"{lobe} (all flies)")
+    axs_sum[i].set_xlabel('peak dF/F', color=markc, fontsize=14)
+    axs_sum[0].set_ylabel('return efficiency', color=markc, fontsize=14)
+
+    # Optional linear fit
+    if len(x_clean) >= 3 and not np.all(x_clean == x_clean[0]):
+        try:
+            coeffs = np.polyfit(x_clean, y_clean, 1)
+            fit_fn = np.poly1d(coeffs)
+            y_pred = fit_fn(x_clean)
+            r_squared = 1 - np.sum((y_clean - y_pred)**2) / np.sum((y_clean - np.mean(y_clean))**2)
+            print(lobe)
+            print(r_squared)
+            if r_squared >= 0.3:
+                x_fit = np.linspace(min(x_clean), max(x_clean), 100)
+                axs_sum[i].plot(x_fit, fit_fn(x_fit), linestyle='--', color=markc)
+                axs_sum[i].text(0.05, 0.95, f'$R^2 = {r_squared:.2f}$',
+                                transform=axs_sum[i].transAxes,
+                                verticalalignment='top',
+                                fontsize=12,
+                                color=markc)
+        except np.linalg.LinAlgError:
+            print(f"Linear regression failed for summary lobe {lobes[i]}.")
+
+plt.tight_layout(rect=[0, 0, 1, 0.95])
+plt.suptitle('Summary Across All Flies', fontsize=16)
+plt.savefig(f'{figure_folder}/fig/peak_vs_re.pdf', bbox_inches='tight', dpi=300)
+plt.show()
+
+
+
 
 # %% compare change in activity (auc/time) at entry w/ time since last return (PER FLY)
 
@@ -517,7 +644,7 @@ for fly in flylist:
             if return_key in do:
                 return_df = do[return_key]
                 bout_dur = return_df['relative_time'].iloc[-1] - return_df['relative_time'].iloc[0]
-                if bout_dur >= 0.5 and return_to_edge(return_df):
+                if 30 >= bout_dur >= 1 and return_to_edge(return_df):
                     aucs.append(auc_value)
                     return_efficiencies.append(bout_dur)
         # axs[i].scatter(aucs, return_efficiencies, color=colors[i], alpha=0.8)
@@ -543,7 +670,6 @@ for fly in flylist:
                 fit_fn = np.poly1d(coeffs)
                 y_pred = fit_fn(x_clean)
                 r_squared = 1 - np.sum((y_clean - y_pred)**2) / np.sum((y_clean - np.mean(y_clean))**2)
-
                 # Only apply linear model if R² is decent
                 if r_squared >= 0.3:
                     x_fit = np.linspace(min(x_clean), max(x_clean), 100)
@@ -637,6 +763,7 @@ for i in range(len(lobes)):
     axs[i].set_xlabel('next return length (s)', color=markc, fontsize=14)
     axs[0].set_ylabel('dF/F', color=markc, fontsize=14)
 # fig.suptitle('All Flies Combined', fontsize=16)
+
 
 # %% compare change in activity (df/f max-min) at entry w/ time since last return
 
