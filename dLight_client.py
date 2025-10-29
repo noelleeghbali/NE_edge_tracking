@@ -17,7 +17,7 @@ lobes = ['G2', 'G3', 'G4', 'G5']
 colors = ['#7fffd4', '#08e8de','#ff55a3', '#ff1493']
 
 et_replay_traces_bw(figure_folder, lobes, colors, size = (12,6))
-et_replay_auc_comp(figure_folder, lobes, colors, size=(6,6))
-et_replay_peak_comp(figure_folder, lobes, colors, size=(6,6))
-et_replay_tuning(figure_folder, lobes, colors, size=(10,4))
-
+# et_replay_auc_comp(figure_folder, lobes, colors, size=(6,6))
+# et_replay_peak_comp(figure_folder, lobes, colors, size=(6,6))
+# et_replay_tuning(figure_folder, lobes, colors, size=(10,4))
+# et_replay_traj_bw(figure_folder, lobes, colors, size=(10,5))

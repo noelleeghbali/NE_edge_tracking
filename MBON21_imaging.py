@@ -57,7 +57,7 @@ y = fc.ca
 
 #fc = fci_regmodel(y, ft2, pv2)
 #fc.example_trajectory(cmin=0, cmax=0.5)
-#fc.mean_traj_nF_jump(y, plotjumps=True)
+fc.mean_traj_nF_jump(y, plotjumps=True)
 
 # %%
 # fc = fci_regmodel(pv2[['0_mbon21']].to_numpy().flatten(), ft2, pv2)

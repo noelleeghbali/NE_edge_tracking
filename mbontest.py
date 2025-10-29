@@ -1,3 +1,4 @@
+
 from imaging_analysis import *
 from behavior_analysis import *
 from analysis_funs.regression import fci_regmodel
@@ -12,8 +13,9 @@ from scipy import signal as sg
 import sys
 import pickle
 
-figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/mbon09/picklez/oct_pulses'
-neuron = 'mbon09'
+
+# figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/mbon21/picklez/strip_grid_bump_jump'
+# neuron = 'mbon21'
 #rebaseline(figure_folder, neuron, span=500)
 # peak_FF_heading_vs_entry_angle(figure_folder, neuron)
 # trace_FF_bw(figure_folder, neuron, window=None)
@@ -36,11 +38,16 @@ neuron = 'mbon09'
 # triggered_zFF_first_two(figure_folder, neuron, tbef=5, taf=5, event_type='exit', plotc='black', oct=False)
 # triggered_zFF_first_two(figure_folder, neuron, tbef=5, taf=5, event_type='entry', plotc='black', oct=False)
 
+figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/mbon21/picklez/strip_grid_bump_jump/rb'
+neuron = 'mbon21'
+traj_jump_summary(figure_folder, neuron, n_interp=100, time_threshold=60, colormap='coolwarm', darkmode=True)
 
+
+#%%
 
 # Trajectory w/ fluorescence colormap
 # traj_FF(figure_folder, neuron)
-FF_tuning(figure_folder, neuron)
+# FF_tuning(figure_folder, neuron)
 # FF_time_corr(figure_folder, neuron)
 #FF_xpos_corr(figure_folder, neuron)
 #inbound_outbound_FF(figure_folder, neuron, window=1)

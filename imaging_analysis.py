@@ -4,7 +4,7 @@ import scipy.stats as stats
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import matplotlib.colors as colors_mod
+import matplotlib.colors as mcolors
 from matplotlib import cm
 import statsmodels.api as sm
 import seaborn as sns
@@ -52,6 +52,8 @@ def fictrac_repair(x,y):
         for i, f in enumerate(fixdx):
             x[f:] =x[f:] - (x[f]-x[f-1])
             y[f:] = y[f:] - (y[f]-y[f-1])
+            x = np.array(x, copy=True)
+            y = np.array(y, copy=True)
         return x, y
 
 def rebaseline(pkl_folder, neuron, span=500):
@@ -83,7 +85,7 @@ def add_odor(axs, di, ymin, ymax):
         time_on = df['relative_time'].iloc[0]
         time_off = df['relative_time'].iloc[-1]
         timestamp = time_off - time_on
-        rectangle = patches.Rectangle((time_on, ymin), timestamp, ymax - ymin, facecolor='#fbceb1', alpha=0.5)
+        rectangle = patches.Rectangle((time_on, ymin), timestamp, ymax - ymin, facecolor='#fbceb1', alpha=0.3)
         axs.add_patch(rectangle)
 
 def add_oct(axs, di, ymin, ymax):
@@ -91,7 +93,7 @@ def add_oct(axs, di, ymin, ymax):
         time_on = df['relative_time'].iloc[0]
         time_off = df['relative_time'].iloc[-1]
         timestamp = time_off - time_on
-        rectangle = patches.Rectangle((time_on, ymin), timestamp, ymax - ymin, facecolor='#89cff0', alpha=0.5)
+        rectangle = patches.Rectangle((time_on, ymin), timestamp, 1.1*(ymax - ymin), facecolor='#89cff0', alpha=0.5)
         axs.add_patch(rectangle)
 
 def trace_FF(figure_folder, neuron, window=(60,360)):
@@ -714,6 +716,74 @@ def et_replay_traces_bw(figure_folder, lobes, colors, size):
         fig.savefig(f'{figure_folder}/fig/traces/{fly_id}_et_vs_replay.pdf', bbox_inches='tight')
 
 
+def et_replay_traj_bw(figure_folder, lobes, colors, size):
+    paired_files = {}
+    for filename in os.listdir(figure_folder):
+        if filename.endswith('.pkl'):
+            if '_et_' in filename:
+                prefix = filename.split('_et_')[0]
+                paired_files.setdefault(prefix, {})['et'] = filename
+            elif '_replay_' in filename:
+                prefix = filename.split('_replay_')[0]
+                paired_files.setdefault(prefix, {})['replay'] = filename
+
+    for fly_id, files in paired_files.items():
+        if 'et' not in files or 'replay' not in files:
+            print(f"Skipping {fly_id}: missing pair")
+            continue
+        fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=2)
+        fig.suptitle(f"{fly_id} et vs replay", fontsize=14)
+        data_et = open_pickle(os.path.join(figure_folder, files['et']))
+        data_replay = open_pickle(os.path.join(figure_folder, files['replay']))
+        df_et = data_et['strip1']['pv2']
+        df_replay = data_replay['strip1']['pv2']
+
+        # Shared parameters
+        strip_width = 10
+        # compute height from data
+        yf = max(df_et['ft_posy'].max(), df_replay['ft_posy'].max())
+        yo = min(df_et['ft_posy'].min(), df_replay['ft_posy'].min())
+        
+        axs[0].add_patch(patches.Rectangle((-strip_width / 2, 0), 10, (yf - yo),
+                                        facecolor='grey', alpha=0.4))
+        axs[0].add_patch(patches.Rectangle(((-strip_width / 2) - 210, 0), 10, (yf - yo),
+                                        facecolor='grey', alpha=0.4))
+        axs[0].add_patch(patches.Rectangle(((-strip_width / 2) + 210, 0), 10, (yf - yo),
+                                           facecolor='grey', alpha=0.4))
+
+
+        # Loop through the two datasets and plot them in two columns
+        for ax, (label, df) in zip(axs, [('ET', df_et), ('Replay', df_replay)]):
+            xo = df.iloc[0]['ft_posx']
+            yo = df.iloc[0]['ft_posy']
+
+            ax.plot(df['ft_posx'] - xo, df['ft_posy'] - yo, color='lightgrey', label='clean air')
+            if 'mfc2_stpt' in df.columns:
+                df_odor = df.where(df.mfc2_stpt > 0)
+                ax.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo,
+                        color='red', label='odor only')
+
+            ax.set_title(label, fontsize=13)
+            ax.set_xlabel('x-position (mm)', fontsize=12, color='white')
+            ax.set_ylabel('y-position (mm)', fontsize=12, color='white')
+            ax.tick_params(which='both', axis='both', labelsize=10, length=3,
+                           width=2, color='black', direction='out', left=True, bottom=True)
+            for pos in ['right', 'top']:
+                ax.spines[pos].set_visible(False)
+            for spine in ax.spines.values():
+                spine.set_linewidth(2)
+                spine.set_edgecolor(markc)
+            ax.set_aspect('equal', adjustable='datalim')
+            ax.legend(frameon=False)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        plt.show()
+        if not os.path.exists(f'{figure_folder}/fig/traj'):
+            os.makedirs(f'{figure_folder}/fig/traj')
+        fig.savefig(f'{figure_folder}/fig/traj/{fly_id}_et_vs_replay.pdf', bbox_inches='tight')
+
+
+
 def et_replay_auc_comp(figure_folder, lobes, colors, size):
     paired_files = {}
     for filename in os.listdir(figure_folder):
@@ -897,12 +967,12 @@ def et_replay_peak_comp(figure_folder, lobes, colors, size):
             axs[i].plot(entry_number_replay, peaks_replay[f'G{i+2}'], color=colors[i % len(colors)], alpha=0.3)
             axs[i].set_ylabel(lobe, color=markc)
            
-
         plt.tight_layout()
         plt.show()
         if not os.path.exists(f'{figure_folder}/fig/peaks'):
             os.makedirs(f'{figure_folder}/fig/peaks')
         fig.savefig(f'{figure_folder}/fig/peaks/{fly_id}_peaks_per_entry.pdf', bbox_inches='tight')
+
 
 def oct_trace_FF_bw(figure_folder, neuron, window=(30,360)): 
     for filename in os.listdir(figure_folder):
@@ -2172,9 +2242,6 @@ def FF_tuning(figure_folder, neuron):
             fig.savefig(f'{figure_folder}/fig/tuning/{savename}.pdf', bbox_inches='tight', facecolor='black')
 
             
-
-
-
 def traj_FF(figure_folder, neuron):
     for filename in os.listdir(figure_folder):
         if filename.endswith('.pkl'):
@@ -2185,8 +2252,8 @@ def traj_FF(figure_folder, neuron):
             y = ft2['ft_posy']
             x, y = fictrac_repair(x, y)
             colour = ft2[neuron].to_numpy().flatten()
-            cmin = np.round(np.percentile(colour[~np.isnan(colour)], 1), decimals=1)  
-            cmax = np.round(np.percentile(colour[~np.isnan(colour)], 99), decimals=1) 
+            cmin = np.round(np.percentile(colour[~np.isnan(colour)], 10), decimals=1)  
+            cmax = np.round(np.percentile(colour[~np.isnan(colour)], 90), decimals=1) 
             xrange = np.max(x) - np.min(x)
             yrange = np.max(y) - np.min(y)
             mrange = np.max([xrange, yrange]) + 100
@@ -2199,6 +2266,7 @@ def traj_FF(figure_folder, neuron):
                 inplume = ft2.mfc3_stpt>0
             if (ft2['mfc3_stpt'] == 0).all():
                 inplume = ft2.mfc2_stpt>0
+            _, di, do = inside_outside_acv(ft2)
             c_map = plt.get_cmap('coolwarm')
             cnorm = mpl.colors.Normalize(vmin=cmin, vmax=cmax)
             scalarMap = cm.ScalarMappable(norm=cnorm, cmap=c_map)
@@ -2236,6 +2304,11 @@ def traj_FF(figure_folder, neuron):
                 os.makedirs(f'{figure_folder}/fig/traj_FF')
             fig.savefig(f'{figure_folder}/fig/traj_FF/{savename}.pdf', bbox_inches='tight', facecolor='black')
             plt.show()
+
+
+
+
+
 
 # def AS_DA_tone:
     

@@ -2,20 +2,24 @@ import pandas as pd
 import cv2
 import numpy as np
 import math
+from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.animation as animation
 from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator
 from matplotlib import cm
 from PIL import Image
 from scipy import interpolate
 from scipy import stats
-from scipy.stats import linregress, sem, circmean, pearsonr, spearmanr
+from scipy.stats import linregress, sem, circmean, pearsonr, spearmanr, norm
 from scipy.stats import ttest_rel, wilcoxon, ttest_ind, kruskal, shapiro, normaltest, mannwhitneyu
-import os
+from sklearn.linear_model import LinearRegression
+import os, re, datetime
 import seaborn as sns
 import re
 import scikit_posthocs as sp
+
 
 def open_log(logfile):  # Generate a dataframe from the contents of a log file.
     df = pd.read_table(logfile, delimiter='[,]', engine='python')
@@ -149,19 +153,80 @@ def mean_resultant_vector_length(angles):
     R = np.sqrt(C**2 + S**2) / n
     return R
 
+def get_entry_df(do_df, di_df, exp_df, window=0.5, first_entry=False):
+    """
+    Return a dataframe for entry trajectory:
+    - Normal case: last `window` seconds of do + first `window` seconds of di
+    - First entry: last `window` seconds from exp_df before di starts + first `window` seconds of di
+    """
+    if di_df is None:
+        return None
+    
+    di_start = di_df['seconds'].iloc[0]
+    
+    if first_entry:
+        # Use exp_df for the half-second before first di
+        pre_half = exp_df[(exp_df['seconds'] >= di_start - window) &
+                          (exp_df['seconds'] < di_start)]
+        di_half = di_df[di_df['seconds'] <= di_start + window]
+        entry_df = pd.concat([pre_half, di_half])
+        return entry_df if len(entry_df) > 1 else None
+    
+    if do_df is None:
+        return None
+    
+    # Normal case: do + di
+    do_end = do_df['seconds'].iloc[-1]
+    do_half = do_df[do_df['seconds'] >= do_end - window]
+    di_half = di_df[di_df['seconds'] <= di_start + window]
+    
+    entry_df = pd.concat([do_half, di_half])
+    return entry_df if len(entry_df) > 1 else None
+
 def get_last_second(df):
     # Find the first occurrence of the 'seconds' column, d/t duplicates
     seconds_idx = next(i for i, col in enumerate(df.columns) if col == 'seconds')
     seconds = df.iloc[:, seconds_idx]
     last_time = seconds.iloc[-1]
-    return df[seconds >= (last_time - 1)]
-    
+    return df[seconds >= (last_time - 0.5)]
+
+def inside_outside_xpos(df, edge=25):
+    di = {}
+    do = {}
+    start_x = df['ft_posx'].iloc[0]
+
+    # Split the dataframe into contiguous bouts whenever 'instrip' changes
+    d = dict([*df.groupby(df['instrip'].ne(df['instrip'].shift()).cumsum())])
+
+    for bout, bout_df in d.items():
+        # Compute difference from starting x position
+        bout_df = bout_df.copy()  # avoid SettingWithCopy warnings
+        bout_df['instrip'] = (bout_df['ft_posx'].sub(start_x).abs() < edge)
+
+        if bout_df['instrip'].any():
+            di[bout] = bout_df
+        else:
+            do[bout] = bout_df
+
+    return d, di, do
+
 def inside_outside(df):
     di = {}
     do = {}
     d = dict([*df.groupby(df['instrip'].ne(df['instrip'].shift()).cumsum())])
     for bout in d:
         if d[bout].instrip.any():
+            di[bout]=d[bout]
+        else:
+            do[bout]=d[bout]
+    return d, di, do
+
+def inside_outside_odor(df):
+    di = {}
+    do = {}
+    d = dict([*df.groupby(df['odor_on'].ne(df['odor_on'].shift()).cumsum())])
+    for bout in d:
+        if d[bout].odor_on.any():
             di[bout]=d[bout]
         else:
             do[bout]=d[bout]
@@ -345,7 +410,7 @@ def exp_parameters(folder_path):  # Create variables for visualization
                 xo = exp_df.iloc[0]['ft_posx']
                 yo = exp_df.iloc[0]['ft_posy']
                 # Append the results for the current file to the list
-                params_list.append([figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color])
+                params_list.append([figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color])
             # elif df_oct is not None and df_acv is not None:
             #     print('multiple odors')
             #     first_on_index = df[df['instrip']].index[0] 
@@ -355,7 +420,10 @@ def exp_parameters(folder_path):  # Create variables for visualization
             #     params_list.append([figure_folder, filename, df, df_oct, df_acv, df_light, exp_df, xo, yo, plume_color])
             else:
                 # Create an index for the first instance of odor on (exp start), and filter the df to start at this index
-                first_on_index = df[df['instrip']].index[0]
+                if 'instrip' in df.columns:
+                    first_on_index = df[df['instrip']].index[0]
+                else: 
+                    first_on_index = df[df['odor_on']].index[0]
                 exp_df = df.loc[first_on_index:]
                 bl_df = df.loc[:first_on_index]
                 # Establish coordinates of the subject's origin at the exp start
@@ -374,12 +442,13 @@ def exp_parameters_multiodor(folder_path):
     params_list = []
     for filename in os.listdir(folder):
         if filename.endswith('.log'):
+            print(filename)
             logfile = os.path.join(folder, filename)
             df = open_log(logfile)
             mfc2_vals = df['mfc2_stpt'].unique().tolist()
             mfc3_vals = df['mfc3_stpt'].unique().tolist()
             df_light = df.where(df.led1_stpt == 0.0)
-            if len(mfc2_vals) > 0 and len(mfc3_vals) > 0:
+            if len(mfc2_vals) > 1 and len(mfc3_vals) > 1:
                 df_odor1 = df.where(df.mfc2_stpt > 0)
                 df_odor2 = df.where(df.mfc3_stpt > 0)
                 if 'mch' in filename or 'ben' in filename or 'mho' in filename:
@@ -390,15 +459,19 @@ def exp_parameters_multiodor(folder_path):
                 exp_df = df.loc[first_on_index:]
                 xo = exp_df.iloc[0]['ft_posx']
                 yo = exp_df.iloc[0]['ft_posy']
-                params_list.append(['multiodor', figure_folder, filename, df, df_odor1, df_odor2, df_light, exp_df, xo, yo, plume_colors])
+                params_list.append([figure_folder, filename, df, df_odor1, df_odor2, df_light, exp_df, xo, yo, plume_colors])
             else:
+                print('single odor')
                 df_odor = df.where((df.mfc2_stpt > 0) | (df.mfc3_stpt > 0))
-                plume_color = ['#7ed4e6']
+                if 'mch' in filename:
+                    plume_color = '#d473d4'
+                else:
+                    plume_color = '#7ed4e6'
                 first_on_index = df[df['instrip']].index[0]
                 exp_df = df.loc[first_on_index:]
                 xo = exp_df.iloc[0]['ft_posx']
                 yo = exp_df.iloc[0]['ft_posy']
-                params_list.append(['singleodor', figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color])
+                params_list.append([figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color])
 
     return params_list
 
@@ -422,33 +495,55 @@ def kw_stats(group_data, keywords):
         print("Not enough data to perform statistical test.")
         return None, None, None
 
-def configure_white_plot(size=(4,6), xaxis=False):
-    fig, axs = plt.subplots(1, 1, figsize=size)
+def configure_white_plot(size=(4, 6), xaxis=False, nrows=1, ncols=1):
+    fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=size)
+    markc = 'black'
+    # Flatten axs if it's a 2D array (in case of multiple rows/cols)
+    if isinstance(axs, np.ndarray):
+        axs = axs.flatten()
+        for ax in axs:
+            ax.set_facecolor('white')  # Plot area background
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('black')
+            ax.spines['left'].set_linewidth(2)
+            ax.tick_params(axis='x', colors='black', width=2)
+            ax.tick_params(axis='y', colors='black', width=2)
+            if xaxis:
+                ax.xaxis.label.set_color('black')
+                ax.spines['bottom'].set_visible(xaxis)
+                ax.spines['bottom'].set_color('black')
+                ax.spines['bottom'].set_linewidth(2)
+            if not xaxis:
+                ax.tick_params(axis='x', which='both', length=0)
+                ax.spines['bottom'].set_visible(False)
+    else:
+        axs = axs
+        axs.set_facecolor('white')  # Plot area background
+        axs.spines['top'].set_visible(False)
+        axs.spines['right'].set_visible(False)
+        axs.spines['left'].set_color('black')
+        axs.spines['left'].set_linewidth(2)
+        axs.tick_params(axis='x', colors='black', width=2)
+        axs.tick_params(axis='y', colors='black', width=2)
+        if xaxis:
+            axs.xaxis.label.set_color('white')
+            axs.spines['bottom'].set_visible(xaxis)
+            axs.spines['bottom'].set_color('white')
+            axs.spines['bottom'].set_linewidth(2)
+        if not xaxis:
+            axs.tick_params(axis='x', which='both', length=0)
+            axs.spines['bottom'].set_visible(False)
     plt.rcParams['pdf.fonttype'] = 42
     plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['font.sans-serif'] = 'Arial'
-    fig.patch.set_facecolor('white')  # Set background to black
-    axs.set_facecolor('white')  # Set background of plotting area to black
+    fig.patch.set_facecolor('white')  # Figure background
     plt.rcParams['text.color'] = 'black'
     plt.rcParams['axes.labelcolor'] = 'black'
     plt.rcParams['xtick.color'] = 'black'
     plt.rcParams['ytick.color'] = 'black'
-    plt.gca().spines['top'].set_visible(False)
-    plt.gca().spines['right'].set_visible(False)
-    plt.rcParams['text.color'] = 'black'
-    axs.spines['bottom'].set_visible(xaxis)
-    axs.spines['bottom'].set_color('black')
-    axs.spines['bottom'].set_linewidth(2)
-    axs.spines['left'].set_color('black')
-    axs.spines['left'].set_linewidth(2)
-    axs.tick_params(axis='x', colors='black')
-    axs.tick_params(axis='y', colors='black')
-    if xaxis:
-        axs.xaxis.label.set_color('black')
-        axs.tick_params(axis='x', colors='black')
-    plt.gca().spines['left'].set_linewidth(2)
-    markc = 'black'
     return fig, axs, markc
+
 
 def configure_bw_plot(size=(4, 6), xaxis=False, nrows=1, ncols=1):
     fig, axs = plt.subplots(nrows=nrows, ncols=ncols, figsize=size)
@@ -460,29 +555,37 @@ def configure_bw_plot(size=(4, 6), xaxis=False, nrows=1, ncols=1):
             ax.set_facecolor('black')  # Plot area background
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
-            ax.spines['bottom'].set_visible(xaxis)
-            ax.spines['bottom'].set_color('white')
-            ax.spines['bottom'].set_linewidth(2)
             ax.spines['left'].set_color('white')
             ax.spines['left'].set_linewidth(2)
             ax.tick_params(axis='x', colors='white', width=2)
             ax.tick_params(axis='y', colors='white', width=2)
             if xaxis:
                 ax.xaxis.label.set_color('white')
+                ax.spines['bottom'].set_visible(xaxis)
+                ax.spines['bottom'].set_color('white')
+                ax.spines['bottom'].set_linewidth(2)
+            if not xaxis:
+                ax.tick_params(axis='x', which='both', length=0)
+                ax.spines['bottom'].set_visible(False)
+                
     else:
         axs = axs
         axs.set_facecolor('black')  # Plot area background
         axs.spines['top'].set_visible(False)
         axs.spines['right'].set_visible(False)
-        axs.spines['bottom'].set_visible(xaxis)
-        axs.spines['bottom'].set_color('white')
-        axs.spines['bottom'].set_linewidth(2)
         axs.spines['left'].set_color('white')
         axs.spines['left'].set_linewidth(2)
         axs.tick_params(axis='x', colors='white', width=2)
         axs.tick_params(axis='y', colors='white', width=2)
         if xaxis:
             axs.xaxis.label.set_color('white')
+            axs.spines['bottom'].set_visible(xaxis)
+            axs.spines['bottom'].set_color('white')
+            axs.spines['bottom'].set_linewidth(2)
+        if not xaxis:
+            axs.tick_params(axis='x', which='both', length=0)
+            axs.spines['bottom'].set_visible(False)
+
     plt.rcParams['pdf.fonttype'] = 42
     plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['font.sans-serif'] = 'Arial'
@@ -493,10 +596,10 @@ def configure_bw_plot(size=(4, 6), xaxis=False, nrows=1, ncols=1):
     plt.rcParams['ytick.color'] = 'white'
     return fig, axs, markc
 
-def style_ax(ax, markc, title, xtick_labels, ylabel, xlim):
+def style_ax(ax, markc, title, xtick_labels, xticks, ylabel, xlim):
     ax.tick_params(which='both', axis='both', labelsize=12, length=3, width=2,
-                   color='black', direction='out', left=True, bottom=True)
-    ax.tick_params(axis='both', colors='white')
+                   color=markc, direction='out', left=True, bottom=True)
+    ax.tick_params(axis='both', colors=markc)
 
     for pos in ['right', 'top']:
         ax.spines[pos].set_visible(False)
@@ -504,14 +607,28 @@ def style_ax(ax, markc, title, xtick_labels, ylabel, xlim):
         spine.set_linewidth(2)
         spine.set_edgecolor(markc)
 
-    ax.set_ylabel(ylabel, fontsize=18, color='white')
-    ax.set_yticklabels([f"{tick:.1f}" for tick in ax.get_yticks()],
-                       fontsize=14, color=markc)
-    ax.set_xticks([1, 2])
-    ax.set_xticklabels(xtick_labels, fontsize=16, color=markc, rotation=45)
+    ax.set_ylabel(ylabel, fontsize=14, color=markc)
+    for label in ax.get_yticklabels():
+        label.set_color(markc)
+        label.set_fontsize(14)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xtick_labels, fontsize=14, color=markc, rotation=45)
     ax.set_xlim(xlim)
-    ax.set_title(title, fontsize=14, color='white')
+    ax.set_title(title, fontsize=14, color=markc)   
 
+ 
+def linregress_r2(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size < 2 or y.size < 2:
+        return np.nan, np.nan, np.nan  # not enough points
+    A = np.vstack([x, np.ones_like(x)]).T
+    m, b = np.linalg.lstsq(A, y, rcond=None)[0]
+    y_hat = m * x + b
+    ss_res = np.sum((y - y_hat) ** 2)
+    ss_tot = np.sum((y - y.mean()) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot != 0 else 0.0
+    return m, b, r2
 
 def configure_white_polar(size=(6, 6), grid=True):
     fig, axs = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=size)
@@ -536,7 +653,6 @@ def configure_white_polar(size=(6, 6), grid=True):
     axs.set_theta_direction(-1)
     return fig, axs, markc
 
-
 def configure_bw_polar(size=(6, 6), grid=True):
     fig, axs = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=size)
     markc = 'white'
@@ -560,8 +676,46 @@ def configure_bw_polar(size=(6, 6), grid=True):
     axs.set_theta_direction(-1)
     return fig, axs, markc
 
+def get_a_bout_calc(df, data_type):
+    def path_length(x, y):
+        n = len(x)
+        lv = [np.sqrt((x[i]-x[i-1])**2 + (y[i]-y[i-1])**2) for i in range (1,n)]
+        lt = np.cumsum(lv)
+        L = sum(lv)
+        return lt, L
 
-def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim, ylim, led, hlines=[], select_file=None, plot_type='odor', baseline=True, save=False):
+    # Based on the string input 'data_type', return a specified calculation
+    if data_type == 'x_distance_from_plume':
+        return df['ft_posx'].max() - df['ft_posx'].min()
+    if data_type == 'duration':
+        duration = df['timestamp'].iloc[-1] - df['timestamp'].iloc[0]
+        return duration.total_seconds()
+    if data_type == 'avg_speed':
+        return df['speed'].mean()
+    if data_type == 'path_length':
+        df.reset_index(drop=True, inplace=True)
+        lt, pl = path_length(df.ft_posx, df.ft_posy)
+        return pl
+    if data_type == 'tortuosity':
+        df.reset_index(drop=True, inplace=True)
+        lt, pl = path_length(df.ft_posx, df.ft_posy)
+        x_i = df['ft_posx'].iloc[0]
+        x_f = df['ft_posx'].iloc[-1]
+        y_i = df['ft_posy'].iloc[0]
+        y_f = df['ft_posy'].iloc[-1]
+        disp = ((x_f - x_i)**2 + (y_f - y_i)**2)**0.5
+        tort = pl / disp
+        return tort
+    if data_type == 'furthest_distance_from_plume':
+        x1, y1 = df['ft_posx'].iloc[0], df['ft_posy'].iloc[0]
+        x2, y2 = df['ft_posx'].iloc[-1], df['ft_posy'].iloc[-1]
+        distances = np.abs((y2 - y1) * df['ft_posx'] - (x2 - x1) * df['ft_posy'] + x2 * y1 - y2 * x1) / np.sqrt((y2 - y1)**2 + (x2 - x1)**2)
+        dist = distances.max()
+        return dist
+    return None
+
+
+def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim, ylim, led, hlines=[], angle=0, select_file=None, plot_type='odor', baseline=True, save=False):
     params_list = exp_parameters(folder_path)
     if led == 'none':
         ledc = 'grey'
@@ -570,12 +724,12 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
     elif led == 'green':
         ledc = '#0bdf51'
     for this_experiment in params_list:
-        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
         # If a file is specified and the current file is not the specified one, skip to the next iteration
         if select_file and filename != select_file:
             continue
         # Create a figure and set the font to Arial
-        fig, axs = plt.subplots(1, 1, figsize=(10, 10))
+        fig, axs, markc = configure_white_plot(size=(10,10),xaxis=True)
         plt.rcParams['font.family'] = 'sans-serif'
         plt.rcParams['font.sans-serif'] = 'Arial'
         # In an odor plume, plot the trajectory when the animal is in the odor
@@ -583,10 +737,18 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
             if baseline:
                 plt.plot(df['ft_posx'] - xo, df['ft_posy'] - yo, color='grey', label='clean air', linewidth=2)
             else:
-                plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air', linewidth=2)
-            plt.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
+                plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='#6acff6', label='clean air', linewidth=2)
+            plt.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='red', label='odor only', linewidth=2)
             plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=2)
-            plt.gca().add_patch(patches.Rectangle((-strip_width / 2, plume_start), strip_width, strip_length, facecolor=plume_color, alpha=0.5))
+            if np.abs(angle) > 0:
+                plume_adj = (strip_width/2) / np.sqrt(2)
+                mask = exp_df['instrip'].fillna(False)
+                height = (exp_df.loc[mask, 'ft_posx'].max() - exp_df.loc[mask, 'ft_posx'].min()) * np.sqrt(2) + 30
+                x1 = exp_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = exp_df.iloc[0]['ft_posy'] - yo + plume_adj
+                plt.gca().add_patch(patches.Rectangle((x1, y1),strip_width,height,angle=angle,facecolor=plume_color,alpha=0.5))
+            else:
+                plt.gca().add_patch(patches.Rectangle((-strip_width / 2, plume_start), strip_width, strip_length, facecolor='grey', alpha=0.5))
             savename = filename + '_odor_trajectory.pdf'
         # In a light plume, plot the trajectroy when the animal is in the light
         elif plot_type == 'odorless':
@@ -602,14 +764,17 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
             for i in (1, len(hlines)):
                 plt.hlines(y=hlines[i - 1], xmin=-100, xmax=100, colors='k', linestyles='--', linewidth=1)
         # Set axes, labels, and title
-        plt.xlim(xlim)
-        plt.ylim(ylim)
+        if angle == 0:
+            plt.xlim(xlim)
+            plt.ylim(ylim)
+        else:
+            axs.set_aspect('equal', adjustable='datalim') 
         # plt.legend()
         plt.title(filename, fontsize=14)
-        axs.set_xlabel('x-position (mm)', fontsize=14, color='white')
-        axs.set_ylabel('y-position (mm)', fontsize=14, color='white')
+        axs.set_xlabel('x-position (mm)', fontsize=14, color=markc)
+        axs.set_ylabel('y-position (mm)', fontsize=14, color=markc)
         # Further customization
-        axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
+        axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color=markc, direction='out', left=True, bottom=True)
         for pos in ['right', 'top']:
             axs.spines[pos].set_visible(False)
         plt.tight_layout()
@@ -617,12 +782,107 @@ def trajectory_plotter(folder_path, strip_width, strip_length, plume_start, xlim
         for _, spine in axs.spines.items():
             spine.set_linewidth(2)
         for spine in axs.spines.values():
-            spine.set_edgecolor('black')
+            spine.set_edgecolor(markc)
         # Save and show the plot
         if save:
             plt.savefig(os.path.join(figure_folder, savename))
         else:
             plt.show()
+
+
+def plot_gaussian_alpha_plume(center_x, start_y, strip_width, strip_length, plume_color, ax, max_alpha=1.0):
+    # Parameters
+    resolution = 0.1  # mm per step along width
+    half_width = strip_width / 2
+    sigma = 25 / np.sqrt(2 * np.log(2))  # Gaussian sigma from FWHM = 25 mm
+    x_vals = np.arange(-half_width, half_width + resolution, resolution)
+    norm_alpha = norm(loc=0, scale=sigma)
+    
+    # Plot thin vertical strips across the width
+    for x in x_vals:
+        alpha = norm_alpha.pdf(x) / norm_alpha.pdf(0) * max_alpha  # Normalize to max_alpha
+        rect = patches.Rectangle(
+            (center_x + x, start_y),
+            resolution,
+            strip_length,
+            facecolor=plume_color,
+            edgecolor=None,
+            alpha=alpha,
+            linewidth=0
+        )
+        ax.add_patch(rect)
+
+def plot_gaussian_plume_vector(center_x, start_y, strip_width, strip_length, ax,
+                               fwhm=25, resolution=0.1,
+                               cmap='Greys_r', min_val=0.2, max_val=0.7):
+    half_width = strip_width / 2
+    sigma = fwhm / np.sqrt(2 * np.log(2))
+    x_vals = np.arange(-half_width, half_width + resolution, resolution)
+    norm_alpha = norm(loc=0, scale=sigma)
+
+    peak = norm_alpha.pdf(0)
+    intensities = norm_alpha.pdf(x_vals) / peak  # values 0..1
+
+    # Rescale intensities into [min_val, max_val]
+    scaled_t = min_val + intensities * (max_val - min_val)
+
+    colormap = cm.get_cmap(cmap)
+
+    for x, t in zip(x_vals, scaled_t):
+        face = colormap(t)
+        face = (face[0], face[1], face[2], 1.0)
+        rect = patches.Rectangle((center_x + x, start_y),
+                                 resolution, strip_length,
+                                 facecolor=face, edgecolor='none')
+        rect.set_antialiased(False)
+        ax.add_patch(rect)
+
+
+def gaussian_plotter(folder_path, strip_width, strip_length, plume_start, xlim, ylim, select_file):
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        if select_file and filename != select_file:
+            continue
+        fig, axs, markc = configure_white_plot(size=(10,10),xaxis=True)
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.sans-serif'] = 'Arial'
+        plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='#6acff6', label='clean air', linewidth=2)
+        plt.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='red', label='odor only', linewidth=2)
+
+        plot_gaussian_plume_vector(
+            center_x=0,
+            start_y=plume_start,
+            strip_width=strip_width,
+            strip_length=strip_length,
+            ax=plt.gca(),
+            fwhm=25, 
+            resolution=0.1, 
+            cmap='Greys',
+            min_val=0.0,
+            max_val=0.4
+        )
+
+        savename = filename + 'gaussian_trajectory.pdf'
+
+        plt.xlim(xlim)
+        plt.ylim(ylim)
+        plt.title(filename, fontsize=14, color=markc)
+        axs.set_xlabel('x-position (mm)', fontsize=14, color=markc)
+        axs.set_ylabel('y-position (mm)', fontsize=14, color=markc)
+        # Further customization
+        axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color=markc, direction='out', left=True, bottom=True)
+        for pos in ['right', 'top']:
+            axs.spines[pos].set_visible(False)
+        plt.tight_layout()
+        sns.despine(offset=10)
+        for _, spine in axs.spines.items():
+            spine.set_linewidth(2)
+        for spine in axs.spines.values():
+            spine.set_edgecolor(markc)
+        plt.savefig(os.path.join(figure_folder, savename))
+        plt.show()
+
 
 def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, xlim, ylim, led, hlines=[], select_file=None, plot_type='odor', save=False):
     params_list = exp_parameters(folder_path)
@@ -638,6 +898,7 @@ def trajectory_plotter_bw(folder_path, strip_width, strip_length, plume_start, x
         if select_file and filename != select_file:
             continue
         fig, axs, markc = configure_bw_plot(size=(10,10), xaxis=True)
+        # print(bl_df['seconds'].iloc[-1]-bl_df['seconds'].iloc[0])
         # In an odor plume, plot the trajectory when the animal is in the odor
         if plot_type == 'odor':
             plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air', linewidth=2)
@@ -721,7 +982,7 @@ def multiodor_trajectory_plotter(folder_path, strip_width, strip_length, plume_s
         else:
             plt.show()
 
-def jumping_plotter_bw(folder_path, led, stripwidth=50, jumpthresh=0, select_file=None, save=False): #
+def jumping_plotter_bw(folder_path, led, stripwidth=50, select_file=None, save=False): #
     params_list = exp_parameters(folder_path)
     if led == 'none':
         ledc = 'grey'
@@ -736,27 +997,132 @@ def jumping_plotter_bw(folder_path, led, stripwidth=50, jumpthresh=0, select_fil
             continue
         fig, axs, markc = configure_white_plot(size=(10,10), xaxis=True)
         d, d_in, d_out = inside_outside(exp_df)
-        if jumpthresh is None:
-            for key, df in d_in.items():
-                if key == 1:
-                    x = -(stripwidth/2)
-                else:
-                    x = df['ft_posx'].min() - xo
-                y = df['ft_posy'].min() - yo
-                height = (df['ft_posy'].max() - df['ft_posy'].min())
-                plume = patches.Rectangle((x, y),stripwidth,height,facecolor='#fbceb1',alpha=0.5)
-                axs.add_patch(plume)
+        for key, df in d_in.items():
+            if key == 1:
+                x = -(stripwidth/2)
+            else:
+                x_entry = df['ft_posx'].iloc[:5].values
+                entry_dx = x_entry[-1] - x_entry[0]
+                xi = df['ft_posx'].iloc[0] - xo
+                x = xi - stripwidth if entry_dx < 0 else xi 
+            y = df['ft_posy'].min() - yo
+            height = (df['ft_posy'].max() - df['ft_posy'].min())
+            plume = patches.Rectangle((x, y),stripwidth,height,facecolor=plume_color, alpha=0.5)
+            axs.add_patch(plume)
         plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air', linewidth=1)
         plt.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=1)
         # if 'ctrl' not in filename:
-            # plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=1)
+        #     plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=1)
         axs.set_aspect('equal', adjustable='datalim') 
-        savename = filename + '_odor_trajectory_white.pdf'
+        savename = filename + '_odor_trajectory_bw'
         plt.title(filename, fontsize=14, color=markc)
         plt.show()
         if not os.path.exists(f'{folder_path}/traj/'):
             os.makedirs(f'{folder_path}/traj/')
         fig.savefig(f'{folder_path}/traj/{savename}.pdf', bbox_inches='tight')
+
+
+def jumping_paired_plotter(folder_path, led='none', stripwidth=50):
+
+    params_list = exp_parameters(folder_path)
+
+    led_map = {'none': 'grey', 'red': '#ff355e', 'green': '#0bda51'}
+    ledc = led_map.get(led.lower(), 'grey')
+
+    # ----------  Pair files by Fly tag  --------------------------------------
+    fly_dict = {}
+    for exp in params_list:
+        figure_folder, filename, *rest = exp
+
+        # Extract Fly number (expects e.g. "Fly7")
+        m = re.search(r'(Fly\d+)', filename, flags=re.IGNORECASE)
+        if not m:
+            continue
+        fly = m.group(1)
+
+        # Detect condition
+        cond = 'exp' if 'exp' in filename.lower() else 'ctrl' if 'ctrl' in filename.lower() else None
+        if cond is None:
+            continue
+
+        fly_dict.setdefault(fly, {})[cond] = exp
+
+    # ----------  Generate paired plots  --------------------------------------
+    for fly, conds in fly_dict.items():
+        if 'exp' not in conds or 'ctrl' not in conds:
+            print(f"[jumping_paired_plotter] {fly}: missing 'exp' or 'ctrl' → skipping.")
+            continue
+
+        exp_data = conds['exp']
+        ctrl_data = conds['ctrl']
+
+        # Unpack tuple structure produced by exp_parameters -------------------
+        (_, exp_filename, _, df_odor_exp, _, _, exp_df, xo_exp, yo_exp, plume_color_exp) = exp_data
+        (_, ctrl_filename, _, df_odor_ctrl, _, _, ctrl_df, xo_ctrl, yo_ctrl, plume_color_ctrl) = ctrl_data
+
+        # ----------  Create figure with configure_white_plot  -----------------
+        fig, axs, markc = configure_white_plot(size=(12, 6), nrows=1, ncols=2, xaxis=True)
+        # `axs` is a 1×2 array‑like → flatten to ensure consistent indexing
+        if hasattr(axs, 'flatten'):
+            ax_exp, ax_ctrl = axs.flatten()
+        else:  # already a list/tuple
+            ax_exp, ax_ctrl = axs[0], axs[1]
+
+        def plot_traj(ax, df_main, df_odor, xo, yo, plume_color, label_prefix):
+            d, d_in, _ = inside_outside(df_main)
+
+            # Shade plume rectangles
+            for key, din in d_in.items():
+                if key == 1:
+                    x_rect = -(stripwidth / 2)
+                else:
+                    x_entry = din['ft_posx'].iloc[:5].values
+                    entry_dx = x_entry[-1] - x_entry[0]
+                    xi = din['ft_posx'].iloc[0] - xo
+                    x_rect = xi - stripwidth if entry_dx < 0 else xi
+                y_rect = din['ft_posy'].min() - yo
+                height_rect = din['ft_posy'].max() - din['ft_posy'].min()
+                ax.add_patch(patches.Rectangle((x_rect, y_rect), stripwidth, height_rect, facecolor=plume_color, alpha=0.5))
+
+            # Main trajectory & odor segment
+            ax.plot(df_main['ft_posx'] - xo, df_main['ft_posy'] - yo, color='grey', linewidth=1)
+            ax.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='lightgrey', linewidth=1)
+            # Light segment if re‑enabled
+            # ax.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label=f'{label_prefix} light', linewidth=1)
+
+            ax.set_aspect('equal', adjustable='box')
+            ax.set_title(label_prefix)
+            ax.tick_params(labelsize=8)
+
+        plot_traj(ax_exp, exp_df, df_odor_exp, xo_exp, yo_exp, plume_color_exp, 'exp')
+        plot_traj(ax_ctrl, ctrl_df, df_odor_ctrl, xo_ctrl, yo_ctrl, plume_color_ctrl,'ctrl')
+
+        # Ensure consistent limits after all plotting
+        ax_exp.relim()
+        ax_ctrl.relim()
+        ax_exp.autoscale_view()
+        ax_ctrl.autoscale_view()
+
+        # Get combined limits
+        xmins = [ax.get_xlim()[0] for ax in (ax_exp, ax_ctrl)]
+        xmaxs = [ax.get_xlim()[1] for ax in (ax_exp, ax_ctrl)]
+        ymins = [ax.get_ylim()[0] for ax in (ax_exp, ax_ctrl)]
+        ymaxs = [ax.get_ylim()[1] for ax in (ax_exp, ax_ctrl)]
+
+        xmin, xmax = min(xmins), max(xmaxs)
+        ymin, ymax = min(ymins), max(ymaxs)
+
+        for ax in (ax_exp, ax_ctrl):
+            ax.set_xlim(xmin, xmax)
+            ax.set_ylim(ymin, ymax)
+
+        fig.suptitle(f'{fly}: exp vs ctrl', fontsize=14, color=markc)
+        handles, labels = ax_exp.get_legend_handles_labels()
+        fig.legend(handles, labels, frameon=False, loc='upper right')
+        plt.show()
+        if not os.path.exists(f'{folder_path}/paired/'):
+            os.makedirs(f'{folder_path}/paired/')
+        fig.savefig(f'{folder_path}/paired/{fly}.pdf', bbox_inches='tight')
 
 def jumping_return_rate(folder_path, led, select_file=None, save=False):
     params_list = exp_parameters(folder_path)
@@ -881,6 +1247,1488 @@ def zigzag_plotter_bw(folder_path, led, select_file=None, save=False):
         else:
             plt.show()
 
+def dir_training_plotter(folder_path, led, select_file=None):
+    params_list = exp_parameters_multiodor(folder_path)
+    if led == 'none':
+        ledc = 'grey'
+    elif led == 'red':
+        ledc = '#ff355e'
+    elif led == 'green':
+        ledc = '#0bda51'
+    for this_experiment in params_list:
+        if len(this_experiment) == 9:
+            multi = False
+            figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        elif len(this_experiment) == 10:
+            figure_folder, filename, df, df_odor1, df_odor2, df_light, exp_df, xo, yo, plume_colors = this_experiment
+            multi = True
+        if select_file and filename != select_file:
+            continue
+        fig, axs, markc = configure_white_plot(size=(10,10), xaxis=True)
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        plume2_df = exp_df[exp_df['exp_phase']==3]
+        plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        plume2_df = plume2_df.loc[plume2_start:]
+        plume_adj = 25 / np.sqrt(2)
+        width=50
+        mask1 = plume1_df['instrip'].fillna(False)
+        height1 = (plume1_df.loc[mask1, 'ft_posx'].max() - plume1_df.loc[mask1, 'ft_posx'].min()) * np.sqrt(2) + 30
+        mask2 = plume2_df['instrip'].fillna(False)
+        height2 = (plume2_df.loc[mask2, 'ft_posx'].max() - plume2_df.loc[mask2, 'ft_posx'].min()) * np.sqrt(2) + 30
+        if multi:
+            plume_color1 = plume_colors[1]
+            plume_color2 = plume_colors[0]
+        else:
+            plume_color1 = plume_color
+            plume_color2 = plume_color
+        
+        if 'ctrl' in filename:
+            if 'LR' in filename or 'LL' in filename:
+                x1 = -plume_adj
+                y1 = -plume_adj
+                angle1 = 45
+                angle2 = 0
+            elif 'RR' in filename or 'RL' in filename:
+                x1 = -plume_adj
+                y1 = plume_adj
+                angle1 = -45
+                angle2 = 0 
+        else:
+            if 'LR' in filename:
+                angle1 = 45
+                angle2 = -45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo - plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo + plume_adj
+            elif 'RR' in filename:
+                angle1 = -45
+                angle2 = -45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo + plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo + plume_adj
+            elif 'RL' in filename:
+                angle1 = -45
+                angle2 = 45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo + plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo - plume_adj
+            elif 'LL' in filename:
+                angle1 = 45
+                angle2 = 45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo - plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo - plume_adj
+        
+        if 'ctrl' not in filename:
+            plume1 = patches.Rectangle((x1, y1),width,height1,angle=angle1,facecolor=plume_color1,alpha=0.5)
+            axs.add_patch(plume1)
+            plume2 = patches.Rectangle((x2, y2),width,height2,angle=angle2,facecolor=plume_color2,alpha=0.5)
+            axs.add_patch(plume2)
+        else:
+            plume1 = patches.Rectangle((x1, y1),width,300,angle=angle1,facecolor=plume_color1,alpha=0.5)
+            axs.add_patch(plume1)
+        
+        plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air', linewidth=2)
+        if multi:
+            plt.plot(df_odor1['ft_posx'] - xo, df_odor1['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
+            plt.plot(df_odor2['ft_posx'] - xo, df_odor2['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
+
+        else:
+            plt.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
+        if 'ctrl' not in filename:
+            plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=2)
+        
+        savename = filename + '_odor_trajectory.pdf'
+        plt.title(filename, fontsize=14, color=markc)
+        axs.set_xlabel('x-position (mm)', fontsize=14)
+        axs.set_ylabel('y-position (mm)', fontsize=14)
+        axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
+        for pos in ['right', 'top']:
+            axs.spines[pos].set_visible(False)
+        plt.tight_layout()
+        sns.despine(offset=10)
+        for _, spine in axs.spines.items():
+            spine.set_linewidth(2)
+        for spine in axs.spines.values():
+            spine.set_edgecolor(markc)
+        axs.tick_params(axis='both', colors=markc)
+        axs.set_aspect('equal', adjustable='datalim') 
+        plt.tight_layout()
+        plt.savefig(os.path.join(figure_folder, savename))
+        # plt.show()
+
+
+
+def dir_training_plotter_paired(folder_path, led, select_file=None):
+    params_list = exp_parameters(folder_path)
+    if led == 'none':
+        ledc = 'grey'
+    elif led == 'red':
+        ledc = '#ff355e'
+    elif led == 'green':
+        ledc = '#0bda51'
+    grouped_experiments = defaultdict(list)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        if select_file and filename != select_file:
+            continue
+        match = re.search(r'[Ff]ly\d+', filename)
+        if match:
+            fly_id = match.group()
+        else:
+            continue  # skip files without Fly ID
+        grouped_experiments[fly_id].append(this_experiment)
+
+    for fly_id, experiments in grouped_experiments.items():
+        if len(experiments) < 2:
+            continue  # only plot if there are at least 2 experiments
+
+        fig, axs, markc = configure_bw_plot(size=(16,8), xaxis=True, ncols=2)
+        axs = axs.flatten()
+
+        # --- Global plume2 height across experiments ---
+        plume2_heights = []
+        for this_experiment in experiments:
+            _, filename, _, df_odor, df_light, _, exp_df, xo, yo, plume_color = this_experiment
+            plume2_df = exp_df[exp_df['exp_phase'] == 3]
+            plume2_start = plume2_df[plume2_df['instrip']].index.min()
+            plume2_df = plume2_df.loc[plume2_start:]
+            mask2 = plume2_df['instrip'].fillna(False)
+            height2 = (plume2_df.loc[mask2, 'ft_posx'].max() - plume2_df.loc[mask2, 'ft_posx'].min()) * np.sqrt(2) + 30
+            plume2_heights.append(height2)
+        max_plume2_height = max(plume2_heights)
+
+        # --- Global x/y limits ---
+        all_x, all_y = [], []
+        for this_experiment in experiments:
+            _, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+            all_x.extend(list(exp_df['ft_posx'] - xo))
+            all_y.extend(list(exp_df['ft_posy'] - yo))
+
+        x_pad = (max(all_x) - min(all_x)) * 0.1
+        y_pad = (max(all_y) - min(all_y)) * 0.1
+        xmin, xmax = min(all_x) - x_pad, max(all_x) + x_pad
+        ymin, ymax = min(all_y) - y_pad, max(all_y) + y_pad
+
+        # --- Plot each experiment ---
+        for ax, this_experiment in zip(axs, experiments):
+            figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+
+            plume1_df = exp_df[exp_df['exp_phase'] == 1]
+            plume1_start = plume1_df[plume1_df['instrip']].index.min()
+            plume1_df = plume1_df.loc[plume1_start:]
+            plume2_df = exp_df[exp_df['exp_phase'] == 3]
+            plume2_start = plume2_df[plume2_df['instrip']].index.min()
+            plume2_df = plume2_df.loc[plume2_start:]
+            plume_adj = 25 / np.sqrt(2)
+            width = 50
+            mask1 = plume1_df['instrip'].fillna(False)
+            height1 = (plume1_df.loc[mask1, 'ft_posx'].max() - plume1_df.loc[mask1, 'ft_posx'].min()) * np.sqrt(2) + 30
+            height2 = max_plume2_height  # force equal plume2 length
+
+            # Determine angles & offsets
+            if 'LR' in filename:
+                angle1, angle2 = 45, -45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo - plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo + plume_adj
+            elif 'RR' in filename:
+                angle1, angle2 = -45, -45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo + plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo + plume_adj
+            elif 'RL' in filename:
+                angle1, angle2 = -45, 45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo + plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo - plume_adj
+            elif 'LL' in filename:
+                angle1, angle2 = 45, 45
+                x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y1 = plume1_df.iloc[0]['ft_posy'] - yo - plume_adj
+                x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+                y2 = plume2_df.iloc[0]['ft_posy'] - yo - plume_adj
+
+            # Draw rectangles
+            plume1 = patches.Rectangle((x1, y1), width, height1, angle=angle1,
+                                       facecolor=plume_color, alpha=0.5)
+            plume2 = patches.Rectangle((x2, y2), width, height2, angle=angle2,
+                                       facecolor=plume_color, alpha=0.5)
+            ax.add_patch(plume1)
+            ax.add_patch(plume2)
+            ax.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air', linewidth=2)
+            ax.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
+            ax.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=2)
+            ax.set_title(filename, fontsize=14, color=markc)
+            ax.set_xlabel('x-position (mm)', fontsize=12, color=markc)
+            ax.set_ylabel('y-position (mm)', fontsize=12, color=markc)
+            ax.set_aspect('equal', adjustable='datalim')
+            ax.set_xlim(xmin, xmax)
+            ax.set_ylim(ymin, ymax)
+            ax.set_aspect('equal', adjustable='box')
+            sns.despine(ax=ax, offset=10)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        savename = f"{fly_id}_odor_trajectory.pdf"
+        plt.savefig(os.path.join(figure_folder, savename))
+        plt.show()
+
+
+
+def dir_training_return_efficiency(folder_path, savename, groups=['AA', 'BA'], size=(3,5), colors=['lightgrey', '#7ed4e6']):
+    params_list = exp_parameters(folder_path)
+    data_dict = {}
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=False)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        if 'ctrl' in filename:
+            continue
+        match = re.search(r'Fly(\d+)', filename)
+        if not match:
+            continue
+        fly_id = int(match.group(1))
+        label = groups[0] if 'LL' in filename or 'RR' in filename else groups[1]
+
+        t_match = re.search(r'(\d{8}-\d{6})', filename)
+        plume2_df = exp_df[exp_df['exp_phase']==3]
+        plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        plume2_df = plume2_df.loc[plume2_start:]
+        _, d_in, d_out = inside_outside(plume2_df)
+
+        entries = len(d_in) - 1
+        pl = get_a_bout_calc(plume2_df, 'path_length') / 1000
+        
+        data_dict.setdefault(fly_id, {})[label] = entries / pl
+
+    data1 = []
+    data2 = []
+    for fly_id, data in data_dict.items():
+        plt.plot([1,2], [data[groups[0]], data[groups[1]]], color=markc, alpha=0.8)
+        data1.append(data[groups[0]])
+        data2.append(data[groups[1]])
+
+    stat, p_value = wilcoxon(data1, data2)
+    p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+    axs.text(1.5, max(max(data1, default=0), max(data2, default=0)) * 1.1, p_text,
+         ha='center', va='bottom', fontsize=14, color=markc)
+    
+    axs.plot([1,2], [np.mean(data1), np.mean(data2)], color=colors[1], linewidth=3)
+    sem1 = sem(data1) 
+    sem2 = sem(data2)
+    axs.errorbar(1, np.mean(data1), yerr=sem1, color=colors[1], capsize=0, linewidth=3)
+    axs.errorbar(2, np.mean(data2), yerr=sem2, color=colors[1], capsize=0, linewidth=3)
+
+    for pos in ['right', 'top']:
+        axs.spines[pos].set_visible(False)
+    plt.tight_layout()
+    sns.despine(offset=10)
+    for _, spine in axs.spines.items():
+        spine.set_linewidth(2)
+    for spine in axs.spines.values():
+        spine.set_edgecolor(markc)
+    plt.ylabel('returns per meter', fontsize=18, color=markc)
+    plt.yticks(fontsize=14, color=markc)
+    axs.set_xticks(range(1, len(groups)+1))
+    axs.set_xticks([1, 2])
+    axs.set_xticklabels(groups, fontsize=16, color=markc)
+    axs.tick_params(axis='x', which='both', length=0)
+    axs.spines['bottom'].set_visible(False)
+    plt.xlim(0.7, len(groups) + 0.3)
+    plt.tight_layout()
+    plt.show()
+
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def dir_training_return_efficiency_ctrl(folder_path, savename, groups=['MBON', 'DAN'], size=(3,5), colors=['lightgrey', '#7ed4e6']):
+    params_list = exp_parameters(folder_path)
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=False)
+    ctrls = []
+    exps = []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        if 'LR' in filename or 'RL' in filename:
+            continue
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        if (exp_df['exp_phase'] == 3).any():
+            plume2_df = exp_df[exp_df['exp_phase'] == 3]
+            plume2_start = plume2_df[plume2_df['instrip']].index.min()
+            plume2_df = plume2_df.loc[plume2_start:]
+        # _, d_in, d_out = inside_outside(plume1_df)
+        # pl = get_a_bout_calc(plume1_df, 'path_length') / 1000
+        _, d_in, d_out = inside_outside(plume2_df)
+        pl = get_a_bout_calc(plume2_df, 'path_length') / 1000
+
+        entries = len(d_in) -1
+        # for key, df in d_out.items():
+        #     if 'LL' in filename or 'LR' in filename:
+        #         if return_to_edge_angle(df, angle=45):
+        #             entries +=1
+        #     elif 'RL' in filename or 'RR' in filename:
+        #         if return_to_edge_angle(df, angle=-45):
+        #             entries +=1
+    
+        if 'MBON' in filename:
+            ctrls.append(entries/pl)
+        else:
+            exps.append(entries/pl)
+        # else:
+        #     if 'ctrl' in filename:
+        #         ctrls.append(0)
+    print(ctrls)
+    print(exps)
+    plt.scatter(1 + np.random.normal(0, 0.05, len(exps)), exps, color=colors[1])
+    plt.scatter(2 + np.random.normal(0, 0.05, len(ctrls)), ctrls, color=colors[0])       
+    ctrl, exp = np.array(ctrls), np.array(exps)    
+    ctrl_avg, ctrl_sem = np.mean(ctrl), sem(ctrl)
+    exp_avg, exp_sem = np.mean(exp), sem(exp)
+    axs.hlines(ctrl_avg, 1.9, 2.1, colors=markc, linewidth=3)
+    axs.hlines(exp_avg, 0.9, 1.1, colors=markc, linewidth=3)
+    axs.errorbar(2, ctrl_avg, yerr=ctrl_sem, color=markc, capsize=0, linewidth=3)
+    axs.errorbar(1, exp_avg, yerr=exp_sem, color=markc, capsize=0, linewidth=3)
+    style_ax(axs, markc, title=None, xtick_labels=['exp', 'ctrl'], xticks=[1,2], ylabel='returns per meter', xlim=(0.7,2.3))
+    plt.tight_layout()
+    plt.show()
+
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+
+def dir_training_bias_paired(folder_path, savename, size, avgcolor):
+    params_list = exp_parameters(folder_path)
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=False)
+    lefts=[]
+    rights=[]
+    grouped_experiments = defaultdict(list)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        match = re.search(r'[Ff]ly\d+', filename)
+        if match:
+            fly_id = match.group()
+        else:
+            continue  # skip files without Fly ID
+        grouped_experiments[fly_id].append(this_experiment)
+
+    for fly_id, experiments in grouped_experiments.items():
+        left, right = None, None  # reset for each fly
+        for this_experiment in experiments:
+            _, filename, _, df_odor, df_light, _, exp_df, xo, yo, plume_color = this_experiment
+            if 'ctrl' in filename:
+                continue
+            plume1_df = exp_df[exp_df['exp_phase'] == 1]
+            plume2_df = exp_df[exp_df['exp_phase'] == 3]
+            start_x = plume1_df.iloc[-1]['ft_posx']
+            start_y = plume1_df.iloc[-1]['ft_posy']
+            # start_x = plume2_df.iloc[0]['ft_posx']
+            # start_y = plume2_df.iloc[0]['ft_posy']
+            end_x = plume2_df.iloc[-1]['ft_posx']
+            end_y = plume2_df.iloc[-1]['ft_posy']
+            dx, dy = end_x - start_x, end_y - start_y
+            angle = np.degrees(np.arctan2(dx, abs(dy)))
+
+            if 'LR' in filename or 'LL' in filename:
+                left = angle
+                lefts.append(angle)
+            elif 'RL' in filename or 'RR' in filename:
+                right = angle
+                rights.append(angle)
+
+        # plot only if we have both sides
+        if left is not None and right is not None:
+            axs.plot([1, 2], [left, right], linestyle='-', color=markc, label=fly_id, alpha=0.8)
+    lefts = np.array(lefts)
+    rights = np.array(rights)
+    left_avg, left_sem = np.mean(lefts), sem(lefts)
+    right_avg, right_sem = np.mean(rights), sem(rights)
+    axs.plot([1,2], [left_avg, right_avg], color=avgcolor, linewidth=3)
+    axs.errorbar(1, left_avg, yerr=left_sem, color=avgcolor, capsize=0, linewidth=3)
+    axs.errorbar(2, right_avg, yerr=right_sem, color=avgcolor, capsize=0, linewidth=3)
+    stat, p_value = wilcoxon(lefts, rights)
+    p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+    axs.text(1.5, max(max(lefts, default=0), max(rights, default=0)) * 1.1, p_text,
+         ha='center', va='bottom', fontsize=14, color=markc)
+
+    axs.axhline(0, color=markc, linestyle='--', linewidth=1)
+    plt.yticks(fontsize=14, color=markc)
+    plt.ylabel('net travel direction (º)', fontsize=18, color=markc)
+    axs.set_ylim([90, 90])
+    axs.set_yticks([-90, 0, 90])
+    axs.set_yticklabels(['-90', '0', '+90'], color=markc)
+    plt.xlim(0.7, 2.3)
+    axs.set_xticks([1, 2])
+    axs.set_xticklabels(['left', 'right'], fontsize=16, color=markc)
+    axs.tick_params(axis='x', which='both', length=0)
+    axs.spines['bottom'].set_visible(False)
+    # plt.legend()
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+        
+
+def dir_training_bias_paired_ctrl(folder_path, savename, size, colors=['lightgrey', 'blue']):
+    params_list = exp_parameters(folder_path)
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=False)
+    lefts=[]
+    rights=[]
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        _, filename, _, df_odor, df_light, _, exp_df, xo, yo, plume_color = this_experiment
+        if 'ctrl' not in filename:
+            continue
+        start_x = exp_df.iloc[0]['ft_posx']
+        start_y = exp_df.iloc[0]['ft_posy']
+        end_x = exp_df.iloc[-1]['ft_posx']
+        end_y = exp_df.iloc[-1]['ft_posy']
+        dx, dy = end_x - start_x, end_y - start_y
+        angle = np.degrees(np.arctan2(dx, abs(dy)))
+
+        if 'LR' in filename or 'LL' in filename:
+            lefts.append(angle)
+        elif 'RL' in filename or 'RR' in filename:
+            rights.append(angle)
+
+    plt.scatter(1 + np.random.normal(0, 0.05, len(lefts)), lefts, color=colors[0], alpha=0.8)
+    plt.scatter(2 + np.random.normal(0, 0.05, len(rights)), rights, color=colors[1], alpha=0.8)
+    lefts = np.array(lefts)
+    rights = np.array(rights)
+    left_avg, left_sem = np.mean(lefts), sem(lefts)
+    right_avg, right_sem = np.mean(rights), sem(rights)
+    axs.hlines(left_avg, 0.9, 1.1, color=markc, linewidth=3)
+    axs.hlines(right_avg, 1.9, 2.1, color=markc, linewidth=3)
+    axs.errorbar(1, left_avg, yerr=left_sem, color=markc, capsize=0, linewidth=3)
+    axs.errorbar(2, right_avg, yerr=right_sem, color=markc, capsize=0, linewidth=3)
+    stat, p_value = mannwhitneyu(lefts, rights, alternative='two-sided')
+    p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+    axs.text(1.5, max(max(lefts, default=0), max(rights, default=0)) * 1.1, p_text,
+         ha='center', va='bottom', fontsize=14, color=markc)
+
+    axs.axhline(0, color=markc, linestyle='--', linewidth=1)
+    plt.yticks(fontsize=14, color=markc)
+    plt.ylabel('net travel direction (º)', fontsize=18, color=markc)
+    axs.set_ylim([90, 90])
+    axs.set_yticks([-90, 0, 90])
+    axs.set_yticklabels(['-90', '0', '+90'], color=markc)
+    plt.xlim(0.7, 2.3)
+    axs.set_xticks([1, 2])
+    axs.set_xticklabels(['left', 'right'], fontsize=16, color=markc)
+    axs.tick_params(axis='x', which='both', length=0)
+    axs.spines['bottom'].set_visible(False)
+    # plt.legend()
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+        
+
+
+def dir_training_entry_angles(folder_path, savename, size=(5,5), colors=['lightgrey', '#ff355e']):
+    fig, axs, markc = configure_bw_polar(size=size, grid=False)
+    params_list = exp_parameters(folder_path)
+    angles_L = [] #exit
+    angles_R = [] #entry
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        # If a file is specified and the current file is not the specified one, skip to the next iteration
+        if 'ctrl' not in filename:
+            continue
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        # plume2_df = exp_df[exp_df['exp_phase']==3]
+        # plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        # plume2_df = plume2_df.loc[plume2_start:]
+        _, di1, do1 = inside_outside(plume1_df)
+        # _, di2, do2 = inside_outside(plume2_df)
+        for k in sorted(di1.keys()):  # iterate over 1, 3, 5, ...
+            if k == 1:  # first entry has no preceding do
+                entry_df = get_entry_df(None, di1[k], exp_df, window=0.5, first_entry=True)
+            else:  # use preceding do (key = k-1)
+                entry_df = get_entry_df(do1.get(k-1), di1[k], exp_df, window=0.5)
+            if entry_df is not None:
+                if 'LL' in filename or 'LR' in filename:
+                    circmean = circmean_heading(entry_df, angles_R)
+                    circmean = (-circmean) % (2*np.pi)   # mirror
+                    angles_R[-1] = circmean  # overwrite the last appended value
+                    plt.polar([0, circmean], [0, 1], color=colors[0], alpha=0.6, linewidth=1)
+                elif 'RR' in filename or 'RL' in filename:
+                    circmean = circmean_heading(entry_df, angles_R)
+                    plt.polar([0, circmean], [0, 1], color=colors[0], alpha=0.6, linewidth=1)
+        for k in sorted(do1.keys()):  # iterate over 1, 3, 5, ...
+            entry_df = get_entry_df(di1.get(k-1), do1[k], exp_df, window=0.5)
+            if entry_df is not None:
+                if 'LL' in filename or 'LR' in filename:
+                    circmean = circmean_heading(entry_df, angles_L)
+                    circmean = (-circmean) % (2*np.pi)   # mirror
+                    angles_L[-1] = circmean  # overwrite the last appended value
+                    plt.polar([0, circmean], [0, 1], color=colors[1], alpha=0.6, linewidth=1)
+                elif 'RR' in filename or 'RL' in filename:
+                    circmean = circmean_heading(entry_df, angles_L)
+                    plt.polar([0, circmean], [0, 1], color=colors[1], alpha=0.6, linewidth=1)
+        
+    if len(angles_L) > 0:
+        summary_p1_vector = np.mean(np.column_stack((np.cos(angles_L), np.sin(angles_L))), axis=0)
+        summary_p1_rho, summary_p1_phi = cart2pol(summary_p1_vector[0], summary_p1_vector[1])
+        plt.polar([0, summary_p1_phi], [0, summary_p1_rho], color=colors[1], alpha=1, linewidth=5, solid_capstyle='round')
+    if len(angles_R) > 0:
+        summary_p2_vector = np.mean(np.column_stack((np.cos(angles_R), np.sin(angles_R))), axis=0)
+        summary_p2_rho, summary_p2_phi = cart2pol(summary_p2_vector[0], summary_p2_vector[1])
+        plt.polar([0, summary_p2_phi], [0, summary_p2_rho], color=colors[0], alpha=1, linewidth=5, solid_capstyle='round')
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def dir_training_plume_onset_traj(folder_path, savename, size=(6,5), time=True, keywords=['no training', 'L training', 'R training'], colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=(size[0], size[1]*2), xaxis=True, nrows=2, ncols=2)
+    axs = np.array(axs).reshape(2, 2)
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment   
+        if filename == '09102025-112628_PAM_Chr_oct_dir_training_LR_Fly10_over.log' or filename == '09102025-121050_PAM_Chr_oct_dir_training_RL_Fly9.log' or 'ctrl' in filename:
+            continue
+        
+        plume2_df = exp_df[exp_df['exp_phase']==3]
+        plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        plume2_df = plume2_df.loc[plume2_start:]
+        _, d_in, d_out = inside_outside(plume2_df)
+    
+        if (len(d_out)) > 0:
+            first_exit = d_out[list(d_out.keys())[0]] 
+            end_idx_label = first_exit.index[-1]
+            end_idx_pos = plume2_df.index.get_loc(end_idx_label)
+            plume_df = plume2_df.iloc[:end_idx_pos]
+            # plume_df = plume2_df
+            xo = plume_df.iloc[0]['ft_posx']
+            yo = plume_df.iloc[0]['ft_posy']
+            end_x = plume_df.iloc[-1]['ft_posx'] 
+            end_y = plume_df.iloc[-1]['ft_posy'] 
+            dx = end_x - xo
+            dy = end_y - yo
+            plume_df_odor = plume_df.where(plume_df.mfc3_stpt > 0)
+            if 'LR' in filename or 'LL' in filename:
+                axs[0,0].plot(plume_df['ft_posx'] - xo, plume_df['ft_posy'] - yo, color='grey', linewidth=1)
+                axs[0,0].plot(plume_df_odor['ft_posx'] - xo, plume_df_odor['ft_posy'] - yo, color=colors[0],  linewidth=1)
+                axs[0,0].set_title(keywords[0], fontsize=14, color=markc)
+                axs[1,0].arrow(0, 0, dx, dy, head_width=10, color=colors[0], alpha=0.8)
+            elif 'RL' in filename or 'RR' in filename:
+                axs[0,1].plot(plume_df['ft_posx'] - xo, plume_df['ft_posy'] - yo, color='grey', linewidth=1)
+                axs[0,1].plot(plume_df_odor['ft_posx'] - xo, plume_df_odor['ft_posy'] - yo, color= colors[1], linewidth=1)
+                axs[0,1].set_title(keywords[1], fontsize=14, color=markc)
+                axs[1,1].arrow(0, 0, dx, dy, head_width=10, color=colors[1], alpha=0.8)
+            
+    xlims = [ax.get_xlim() for row in axs for ax in row]
+    ylims = [ax.get_ylim() for row in axs for ax in row]
+    xmin = min(x[0] for x in xlims)
+    xmax = max(x[1] for x in xlims)
+    ymin = min(y[0] for y in ylims)
+    ymax = max(y[1] for y in ylims)
+    x_range = xmax - xmin
+    y_range = ymax - ymin
+    max_range = max(x_range, y_range)
+    xmid = (xmax + xmin) / 2
+    ymid = (ymax + ymin) / 2
+    new_xlim = (xmid - max_range / 2, xmid + max_range / 2)
+    new_ylim = (ymid - max_range / 2, ymid + max_range / 2)
+
+    for ax in axs[1]:
+        ax.set_xlim(new_xlim)
+        ax.set_ylim(new_ylim)
+    for ax in axs.flat:
+        ax.set_xlabel('x-position (mm)', fontsize=14)
+        ax.set_ylabel('y-position (mm)', fontsize=14)
+        ax.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color=markc, direction='out', left=True, bottom=True)
+        ax.tick_params(axis='both', colors=markc)
+        ax.set_aspect('equal', adjustable='datalim') 
+        for pos in ['right', 'top']:
+            ax.spines[pos].set_visible(False)
+        plt.tight_layout()
+        sns.despine(offset=10)
+        for _, spine in ax.spines.items():
+            spine.set_linewidth(2)
+        for spine in ax.spines.values():
+            spine.set_edgecolor(markc)
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def dir_training_test_onset_vector(folder_path, savename, size=(6,5), colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=2)
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment   
+        if (exp_df['exp_phase'] == 3).any():
+            plume2_df = exp_df[exp_df['exp_phase']==3]
+            plume2_start = plume2_df[plume2_df['instrip']].index.min()
+            plume2_df = plume2_df.loc[plume2_start:]
+            _, d_in, d_out = inside_outside(plume2_df)
+        else:
+            continue
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        plume1_end = plume1_df.index.max()
+
+        vector_df = exp_df.loc[plume1_end:plume2_start]
+
+        xo = vector_df.iloc[0]['ft_posx']
+        yo = vector_df.iloc[0]['ft_posy']
+        end_x = vector_df.iloc[-1]['ft_posx'] 
+        end_y = vector_df.iloc[-1]['ft_posy'] 
+        dx = end_x - xo
+        dy = end_y - yo
+
+        if 'ctrl' in filename:
+            if 'LL' in filename or 'LR' in filename:
+                axs[0].arrow(0, 0, -dx, dy, head_width=3, color=colors[0], alpha=0.8)
+            else:
+                axs[0].arrow(0, 0, dx, dy, head_width=3, color=colors[0], alpha=0.8)
+        else:
+            if 'LL' in filename or 'LR' in filename:
+                axs[1].arrow(0, 0, -dx, dy, head_width=3, color=colors[1], alpha=0.8)
+            else:
+                axs[1].arrow(0, 0, dx, dy, head_width=3, color=colors[1], alpha=0.8)
+            
+    xlims = [ax.get_xlim() for ax in axs]
+    ylims = [ax.get_ylim() for ax in axs]
+    xmin = min(x[0] for x in xlims)
+    xmax = max(x[1] for x in xlims)
+    ymin = min(y[0] for y in ylims)
+    ymax = max(y[1] for y in ylims)
+    x_range = xmax - xmin
+    y_range = ymax - ymin
+    max_range = max(x_range, y_range)
+    xmid = (xmax + xmin) / 2
+    ymid = (ymax + ymin) / 2
+    new_xlim = (xmid - max_range / 2, xmid + max_range / 2)
+    new_ylim = (ymid - max_range / 2, ymid + max_range / 2)
+
+    for ax in axs:
+        ax.set_xlim(new_xlim)
+        ax.set_ylim(new_ylim)
+    for ax in axs.flat:
+        ax.set_xlabel('x-position (mm)', fontsize=14)
+        ax.set_ylabel('y-position (mm)', fontsize=14)
+        ax.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color=markc, direction='out', left=True, bottom=True)
+        ax.tick_params(axis='both', colors=markc)
+        ax.set_aspect('equal', adjustable='datalim') 
+        for pos in ['right', 'top']:
+            ax.spines[pos].set_visible(False)
+        plt.tight_layout()
+        sns.despine(offset=10)
+        for _, spine in ax.spines.items():
+            spine.set_linewidth(2)
+        for spine in ax.spines.values():
+            spine.set_edgecolor(markc)
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def dir_training_plume_onset_first10_traj(folder_path, savename, size=(6,5), delay=15, colors=['#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment   
+        if 'ctrl' in filename:
+            continue
+        plume2_df = exp_df[exp_df['exp_phase'] == 3]
+        plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        plume2_df = plume2_df.loc[plume2_start:]
+        t0 = plume2_df['seconds'].iloc[0]
+        plume_df = plume2_df[plume2_df['seconds'] <= t0 + delay] # first 10 secs
+        # plume_df=plume2_df
+        plume_df_odor = plume_df.where(plume_df.mfc3_stpt > 0)
+        xo = plume_df.iloc[0]['ft_posx']
+        yo = plume_df.iloc[0]['ft_posy']
+        end_x = plume_df.iloc[-1]['ft_posx'] 
+        end_y = plume_df.iloc[-1]['ft_posy'] 
+        dx = end_x - xo
+        dy = end_y - yo
+        
+        if 'LR' in filename or 'LL' in filename:
+            axs.plot(plume_df['ft_posx'] - xo, plume_df['ft_posy'] - yo, color=colors[0], linewidth=1)
+            axs.arrow(0, 0, dx, dy, head_width=15,color=colors[0], alpha=0.8)
+        # if 'RL' in filename or 'RR' in filename:
+        #     axs.plot(plume_df['ft_posx'] - xo, plume_df['ft_posy'] - yo, color=colors[1], linewidth=1)
+        #     axs.arrow(0, 0, dx, dy, head_width=15, color=colors[1], alpha=0.8)
+    axs.set_xlabel('x-position (mm)', fontsize=14)
+    axs.set_ylabel('y-position (mm)', fontsize=14)
+    axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
+    for pos in ['right', 'top']:
+        axs.spines[pos].set_visible(False)
+    plt.tight_layout()
+    sns.despine(offset=10)
+    for _, spine in axs.spines.items():
+        spine.set_linewidth(2)
+    for spine in axs.spines.values():
+        spine.set_edgecolor(markc)
+    axs.tick_params(axis='both', colors=markc)
+    axs.set_aspect('equal', adjustable='datalim') 
+    plt.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def dir_training_plume_training_traj(folder_path, savename, size=(6,5), colors=['#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=2)
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment   
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        _, di, do = inside_outside(plume1_df)
+        # if (exp_df['exp_phase'] == 3).any():
+        #     plume2_df = exp_df[exp_df['exp_phase'] == 3]
+        #     plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        #     plume2_df = plume2_df.loc[plume2_start:]
+        #     _, di, do = inside_outside(plume2_df)
+        for key, plume_df in di.items():
+            x_end = plume_df['ft_posx'].iloc[-1]
+            y_end = plume_df['ft_posy'].iloc[-1]
+            x_shifted = plume_df['ft_posx'] - x_end
+            y_shifted = plume_df['ft_posy'] - y_end
+            if 'LL' in filename or 'LR' in filename:
+                x_shifted = -x_shifted
+            if 'PAM' in filename:
+                axs[0].plot(x_shifted, y_shifted, color=colors[0], linewidth=1, alpha=0.65)
+            else:
+                axs[1].plot(x_shifted, y_shifted, color=colors[1], linewidth=1, alpha=0.65)
+        # for key, plume_df in list(do.items())[:1]:
+        for key, plume_df in do.items():
+            x_start = plume_df['ft_posx'].iloc[0]
+            y_start = plume_df['ft_posy'].iloc[0]
+            x_shifted = plume_df['ft_posx'] - x_start
+            y_shifted = plume_df['ft_posy'] - y_start
+            # flip for LL / LR
+            if 'LL' in filename or 'LR' in filename:
+                x_shifted = -x_shifted
+            if 'PAM' in filename:
+                axs[0].plot(x_shifted, y_shifted, color='lightgrey', linewidth=1, alpha=0.65)
+            else:
+                axs[1].plot(x_shifted, y_shifted, color='lightgrey', linewidth=1, alpha=0.65)
+    xlims = [ax.get_xlim() for ax in axs]
+    ylims = [ax.get_ylim() for ax in axs]
+
+    xmin = min(x[0] for x in xlims)
+    xmax = max(x[1] for x in xlims)
+    ymin = min(y[0] for y in ylims)
+    ymax = max(y[1] for y in ylims)
+
+    for ax in axs:  # loop through each subplot axis
+        ax.set_xlabel('x-position (mm)', fontsize=14)
+        ax.set_ylabel('y-position (mm)', fontsize=14)
+        ax.tick_params(which='both', axis='both', labelsize=12, length=3, width=2,
+                    color=markc, direction='out', left=True, bottom=True)
+        for pos in ['right', 'top']:
+            ax.spines[pos].set_visible(False)
+        for _, spine in ax.spines.items():
+            spine.set_linewidth(2)
+            spine.set_edgecolor(markc)
+        ax.tick_params(axis='both', colors=markc)
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.set_aspect('equal', adjustable='box')
+    plt.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def dir_training_xpos_dist(folder_path, savename, size=(6,5), ctrl=True, colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    params_list = exp_parameters(folder_path)
+    xpos_left = []
+    xpos_right = []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment          
+        if not ctrl:
+            if 'ctrl' in filename:
+                continue
+        elif ctrl:
+            if 'ctrl' not in filename:
+                continue
+        
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume2_df = exp_df[exp_df['exp_phase']==3]
+
+        if ctrl:
+            xpos = exp_df['ft_posx'] - plume1_df.iloc[-1]['ft_posx']
+        elif not ctrl:
+            xpos = plume2_df['ft_posx'] - plume1_df.iloc[-1]['ft_posx']
+
+        if 'LR' in filename or 'LL' in filename:
+            xpos_left.append(xpos)
+        elif 'RL' in filename or 'RR' in filename:
+            xpos_right.append(xpos)
+    
+    xpos_left = pd.concat(xpos_left, axis=0, ignore_index=True)
+    xpos_right = pd.concat(xpos_right, axis=0, ignore_index=True)
+    sns.kdeplot(xpos_left, color=colors[0], shade=True, cut=0, label='left')
+    sns.kdeplot(xpos_right, color=colors[1], shade=True, cut=0, label='right')
+    plt.axvline(x=0, linestyle='--',color=markc)
+    plt.xlim(-600,600)
+    plt.xlabel('x-position (mm)', color=markc, fontsize=14)
+    plt.ylabel('probability', color=markc, fontsize=14)
+    plt.legend(frameon=False)
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+
+def dir_training_heading_dist(folder_path, savename, size=(6,5), ctrl=True, colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    params_list = exp_parameters(folder_path)
+    xpos_left = []
+    xpos_right = []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment          
+        if not ctrl:
+            if 'ctrl' in filename:
+                continue
+        elif ctrl:
+            if 'ctrl' not in filename:
+                continue
+        
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume2_df = exp_df[exp_df['exp_phase']==3]
+
+        heading = plume2_df['transformed_heading'] 
+
+        if 'LR' in filename or 'LL' in filename:
+            xpos_left.append(heading)
+        elif 'RL' in filename or 'RR' in filename:
+            xpos_right.append(heading)
+    
+    xpos_left = pd.concat(xpos_left, axis=0, ignore_index=True)
+    xpos_right = pd.concat(xpos_right, axis=0, ignore_index=True)
+
+    bins = np.arange(-180, 185, 10)
+
+    axs.hist(xpos_left, bins=bins, color=colors[0], alpha=0.5, density=True, edgecolor=colors[0])
+    axs.hist(xpos_right, bins=bins, color=colors[1], alpha=0.5, density=True, edgecolor=colors[1])
+
+    plt.axvline(x=0, linestyle='--',color=markc)
+    plt.xlim(-180,180)
+    axs.set_xticks([-90, 90])
+    plt.xlabel('heading (º)', color=markc, fontsize=14)
+    plt.ylabel('probability', color=markc, fontsize=14)
+    plt.legend(frameon=False)
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def dir_training_p1_heading_dist(folder_path, savename, size=(6,5), colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    params_list = exp_parameters(folder_path)
+    heading_ctrl = []
+    heading_exp = []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment          
+        
+        plume1_df = exp_df[exp_df['exp_phase'] == 1]
+        plume1_df_odor = plume1_df.where(plume1_df.mfc3_stpt > 0)
+        heading = plume1_df_odor['transformed_heading'] 
+
+        if 'ctrl' in filename:
+            heading_ctrl.append(heading)
+        else:
+            heading_exp.append(heading)
+    
+    heading_ctrl = pd.concat(heading_ctrl, axis=0, ignore_index=True)
+    heading_exp = pd.concat(heading_exp, axis=0, ignore_index=True)
+
+    bins = np.arange(-180, 185, 10)
+
+    axs.hist(heading_ctrl, bins=bins, color=colors[0], alpha=0.5, density=True, edgecolor=colors[0])
+    axs.hist(heading_exp, bins=bins, color=colors[1], alpha=0.5, density=True, edgecolor=colors[1])
+
+    # plt.axvline(x=0, linestyle='--',color=markc)
+    plt.xlim(-180,180)
+    axs.set_xticks([-90, 90])
+    plt.xlabel('heading (º)', color=markc, fontsize=14)
+    plt.ylabel('probability', color=markc, fontsize=14)
+    plt.legend(frameon=False)
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def dir_training_plume_onset_uws(folder_path, savename, multiodor=True, size=(6,5), sample_rate=20, buf_pts=4, keywords=['no training', 'L training', 'R training'], colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    time = np.linspace(-buf_pts, buf_pts, buf_pts * sample_rate * 2)
+    uws_traces = {kw: [] for kw in keywords}
+    if multiodor:
+        params_list = exp_parameters_multiodor(folder_path)
+    else:
+        params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        if multiodor:
+            figure_folder, filename, df, df_odor1, df_odor2, df_light, exp_df, xo, yo, plume_colors = this_experiment
+        else:
+            figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment        
+        if 'ctrl' in filename:
+            _, di, do = inside_outside(exp_df)
+            first_key = list(di.keys())[0]
+            df_in = di[first_key]
+            key = keywords[0]
+        else:
+            plume2_df = exp_df[exp_df['exp_phase']==3]
+            plume2_start = plume2_df[plume2_df['instrip']].index.min()
+            plume2_df = plume2_df.loc[plume2_start:]
+            _, d_in2, d_out2 = inside_outside(plume2_df)
+            first_key = list(d_in2.keys())[0]
+            df_in = d_in2[first_key]
+            if ('RR' in filename or 'LL' in filename):
+                key = keywords[1]
+            elif ('LR' in filename or 'RL' in filename):
+                key = keywords[2]      
+        onset_time = df_in.index[0]
+        half_window = buf_pts * sample_rate
+        if onset_time in df.index:
+            onset_idx = df.index.get_loc(onset_time)
+            # Make sure enough data exists before and after
+            if onset_idx >= half_window and onset_idx + half_window < len(df):
+                segment = df.iloc[onset_idx - half_window : onset_idx + half_window]
+                uws_segment = segment['y-vel'].values
+                baseline = np.mean(uws_segment[:half_window])
+                norm_uws = uws_segment - baseline
+                uws_traces[key].append(norm_uws)
+        
+    for key, traces in uws_traces.items():
+        if traces:
+            mean_trace = np.mean(traces, axis=0)
+            sem_trace = sem(traces, axis=0)
+            color = colors[keywords.index(key)]
+            axs.plot(time, mean_trace, color=color, lw=2, label=key)
+            axs.fill_between(time, mean_trace - sem_trace, mean_trace + sem_trace,
+                             color=color, alpha=0.2)
+    axs.axvline(0, color=markc, linestyle='--')
+    axs.set_xlabel("time (s)", color=markc, fontsize=14)
+    axs.set_ylabel("upwind speed (mm/s)", color=markc, fontsize=14)
+    plt.legend(prop={'size': 10}, frameon=False, loc='upper left', bbox_to_anchor=(1.1, 1.1))
+    plt.title("upwind speed at plume onset", color=markc, fontsize=16)
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def dir_training_avg_plume_onset_uws(folder_path, savename, size=(6,5), sample_rate=10, buf_pts=4, keywords=['no training', 'BA', 'AA'], colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    uws_avg = {kw: [] for kw in keywords}
+    uws_dur_avg = {kw: [] for kw in keywords}
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment        
+        if 'ctrl' in filename:
+            _, di, do = inside_outside(exp_df)
+            first_key = list(di.keys())[0]
+            df_in = di[first_key]
+            key = keywords[0]
+        else:
+            plume2_df = exp_df[exp_df['exp_phase']==3]
+            plume2_start = plume2_df[plume2_df['instrip']].index.min()
+            plume2_df = plume2_df.loc[plume2_start:]
+            _, d_in2, d_out2 = inside_outside(plume2_df)
+            first_key = list(d_in2.keys())[0]
+            df_in = d_in2[first_key]
+            if ('RR' in filename or 'LL' in filename):
+                key = keywords[1]
+            elif ('LR' in filename or 'RL' in filename):
+                key = keywords[2]      
+            
+        onset_time = df_in.index[0]
+        half_window = buf_pts * sample_rate
+        if onset_time in df.index:
+            onset_idx = df.index.get_loc(onset_time)
+            if onset_idx >= half_window and onset_idx + half_window < len(df):
+                segment = df.iloc[onset_idx - half_window : onset_idx + half_window]
+                uws_segment = segment['y-vel'].values
+                uws_dur = segment['seconds'].iloc[-1] - segment['seconds'].iloc[0]
+                post_onset_avg = np.mean(uws_segment[half_window:])  # second half = post-onset
+                uws_avg[key].append(post_onset_avg)
+                uws_dur_avg[key].append(uws_dur)
+        
+    for i, key in enumerate(keywords):
+        x_noise = np.random.uniform(-0.05, 0.05, len(uws_avg[key]))
+        axs.scatter(np.full(len(uws_avg[key]), i) + x_noise, uws_avg[key], color=colors[i])
+    avg_values = [np.mean(uws_avg[key]) if uws_avg[key] else np.nan for key in keywords]
+    avg_durs = [np.mean(uws_dur_avg[key]) if uws_dur_avg[key] else np.nan for key in keywords]
+    print(uws_avg)
+    std_values = [np.std(uws_avg[key]) if len(uws_avg[key]) > 1 else 0 for key in keywords]
+    for i, (mean, error) in enumerate(zip(avg_values, std_values)):
+        axs.hlines(mean, i - 0.1, i + 0.1, colors=markc, linewidth=2)
+        # axs.errorbar(i, mean, yerr=error, color=markc, capsize=0)
+    # axs.hlines(y=0, xmin=0, xmax=2.5, color=markc, linestyles='--', linewidth=1)
+    axs.set_ylabel("avg. upwind speed (mm/s)", color=markc, fontsize=14)
+    axs.set_title(f'avg. upwind speed\n{buf_pts}s after plume onset', color=markc, fontsize=16)
+    axs.set_xticks(range(len(keywords)))
+    axs.set_xticklabels(keywords, fontsize=14, rotation=45)
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def dir_training_inside_outside_avg_plume_onset_uws(folder_path, savename, size=(6,5), colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    all_uws1 = []
+    all_uws2 = []
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment        
+        _, d_in, d_out = inside_outside(exp_df)
+        uws1 = []
+        uws2 = []
+        for key, df in d_in.items():
+            uws = np.mean(df['y-vel'])
+            if int(df['exp_phase'].iloc[-1]) == 1:
+                uws1.append(uws)
+            elif int(df['exp_phase'].iloc[-1]) == 3:
+                uws2.append(uws)
+        uws1_avg = sum(uws1) / len(uws1)
+        uws2_avg = sum(uws2) / len(uws2)
+        all_uws1.append(uws1_avg)
+        all_uws2.append(uws2_avg)
+        plt.plot([1,2], [uws1_avg, uws2_avg], color=markc)
+
+    ctrl, exp = np.array(all_uws1), np.array(all_uws2)    
+    ctrl_avg, ctrl_sem = np.mean(ctrl), sem(ctrl)
+    exp_avg, exp_sem = np.mean(exp), sem(exp)
+    plt.plot([1,2], [ctrl_avg, exp_avg], color=colors[1], linewidth=3)
+    axs.errorbar(1, ctrl_avg, yerr=ctrl_sem, color=colors[1], capsize=0, linewidth=3)
+    axs.errorbar(2, exp_avg, yerr=exp_sem, color=colors[1], capsize=0, linewidth=3)
+    stat, p_value = wilcoxon(ctrl, exp)
+    p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+    axs.text(1.5, max(max(ctrl, default=0), max(exp, default=0)) * 1.1, p_text,
+         ha='center', va='bottom', fontsize=14, color=markc)
+    style_ax(axs, markc, title=None, xtick_labels=['LED on', 'LED off'], xticks=[1,2], ylabel='avg. upwind speed', xlim=(0.7,2.3))
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def dir_training_stats(folder_path, savename, size=(6,5), colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=6)
+    params_list = exp_parameters(folder_path)
+    data = {metric: {'exp': [], 'ctrl': []} for metric in ['latencies', 'res', 'dists', 'eas', 'vels', 'uwes']}
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment    
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        _, di, do = inside_outside(plume1_df)    
+        group = 'ctrl' if 'ctrl' in filename else 'exp'
+
+        lats = []
+        for key, df in do.items():
+            lat = df['seconds'].iloc[-1] - df['seconds'].iloc[0]
+            lats.append(lat)      
+        lats_avg = sum(lats) / len(lats)
+        data['latencies'][group].append(lats_avg)
+
+        res = []
+        for key, df in do.items():
+            dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+            pl = get_a_bout_calc(df, 'path_length')
+            if pl > 0:
+                re = dist/pl
+                res.append(re)
+        data['res'][group].append(sum(res) / len(res))
+
+        dists = []
+        for key, df in do.items():
+            # dist = (plume1_df['ft_posx'].iloc[-1] - plume1_df['ft_posx'].iloc[0]) / 1000
+            dist = (df['ft_posx'].iloc[-1] - df['ft_posx'].iloc[0]) / 1000
+            if 'LL' in filename or 'LR' in filename:
+                dist = -dist
+            dists.append(dist * math.sqrt(2))
+        # data['dists'][group].append(dist * math.sqrt(2))
+        data['dists'][group].append(sum(dists) / len(dists))
+
+        ea = []
+        for k in sorted(di.keys()):  
+            if k == 1: 
+                entry_df = get_entry_df(None, di[k], exp_df, window=0.5, first_entry=True)
+            else:  
+                entry_df = get_entry_df(do.get(k-1), di[k], exp_df, window=0.5)
+            if entry_df is not None:
+                circmean = circmean_heading(entry_df, ea)
+        data['eas'][group].append(mean_resultant_vector_length(ea))
+
+        vels = []
+        for key, df in do.items():
+            vel = np.mean(df['abs_angvel'])
+            vels.append(vel)
+        data['vels'][group].append(sum(vels) / len(vels))
+
+        uw_exits = 0
+        for key, df in di.items():
+            if np.abs(df['ft_posx'].iloc[-1] - xo) < np.abs(df['ft_posy'].iloc[-1] - yo):
+                uw_exits += 1
+            else:
+                print(filename)
+                print('downwind')
+        data['uwes'][group].append(uw_exits/len(di))
+
+
+    datasets = [
+        (axs[0], 'latencies', 'reentry latency (s)', (0.5, 1.5)),
+        (axs[1], 'res', 'return efficiency', (0.5, 1.5)),
+        (axs[2], 'dists', 'progression (m)', (0.5, 1.5)),
+        (axs[3], 'eas', 'entry angle strength', (0.5, 1.5)),
+        (axs[4], 'vels', 'angular velocity (rad/s)', (0.5, 1.5)),
+        (axs[5], 'uwes', 'upwind exit rate', (0.5, 1.5)),
+    ]        
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = data[key]['ctrl']
+        exp_vals = data[key]['exp']
+
+        x_ctrl = np.random.normal(0.7, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(1.22, noise, size=len(exp_vals))
+        ax.scatter(x_ctrl, ctrl_vals, color=colors[0], alpha=0.8)
+        ax.scatter(x_exp, exp_vals, color=colors[1], alpha=0.8)
+
+        stat, p_value = mannwhitneyu(ctrl_vals, exp_vals, alternative='two-sided')
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1, max(max(ctrl_vals), max(exp_vals)) * 1.1,
+                p_text, ha='center', va='bottom', fontsize=10, color=markc)
+
+        mean_ctrl = np.mean(ctrl_vals) if ctrl_vals else 0
+        mean_exp = np.mean(exp_vals) if exp_vals else 0
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.hlines(mean_ctrl, 0.6, 0.8, color=markc, linewidth=3)
+        ax.hlines(mean_exp, 1.1, 1.3, color=markc, linewidth=3)
+        ax.errorbar(0.7, mean_ctrl, yerr=sem_ctrl, color=markc, capsize=0, linewidth=3)
+        ax.errorbar(1.2, mean_exp, yerr=sem_exp, color=markc, capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['ctrl', 'exp'], xticks=[0.7,1.2], ylabel=ylabel, xlim=xlim)
+
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def dir_test_stats(folder_path, savename, size=(6,5), colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, nrows=3)
+    params_list = exp_parameters(folder_path)
+    all_lats = {}
+    all_res  = {}
+    all_pls = {}
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment    
+        if 'ctrl' in filename or 'LR' in filename or 'RL' in filename:
+            continue
+        plume2_df = exp_df[exp_df['exp_phase'] == 3]
+        plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        plume2_df = plume2_df.loc[plume2_start:]
+        # _, di, do = inside_outside(plume2_df)    
+        _, di, do = inside_outside(exp_df)    
+
+        exits = 0
+
+        lats, res, pls = [], [], []
+        for key, df in do.items():
+            lat = df['seconds'].iloc[-1] - df['seconds'].iloc[0]     
+            dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+            pl = get_a_bout_calc(df, 'path_length')
+            if pl > 0:
+                lats.append(lat) 
+                re = dist/pl
+                res.append(re)
+                pls.append(pl/1000)
+                exits += 1
+     
+        exits = np.arange(1, exits + 1)
+        axs[0].scatter(exits, lats, s=10, alpha=0.6, color=colors[1])
+        # axs[0].plot(exits, lats, color=colors[1], alpha=0.4, linewidth=0.8)
+
+        axs[1].scatter(exits, res, s=10, alpha=0.6, color=colors[1])
+        # axs[1].plot(exits, res, color=colors[1], alpha=0.4, linewidth=0.8)
+
+        axs[2].scatter(exits, pls, s=10, alpha=0.6, color=colors[1])
+        # axs[2].plot(exits, pls, color=colors[1], alpha=0.4, linewidth=0.8)
+
+        for i, (lat, re, pl) in enumerate(zip(lats, res, pls), start=1):
+            if i not in all_lats:
+                all_lats[i] = []
+                all_res[i]  = []
+                all_pls[i]  = []
+            all_lats[i].append(lat)
+            all_res[i].append(re)
+            all_pls[i].append(pl)
+    
+    mean_lats = {k: np.mean(v) for k, v in all_lats.items() if len(v) > 2}
+    mean_res = {k: np.mean(v) for k, v in all_res.items() if len(v) > 2}   
+    mean_pls = {k: np.mean(v) for k, v in all_pls.items() if len(v) > 2}   
+
+    if mean_lats:
+        axs[0].plot(list(mean_lats.keys()), list(mean_lats.values()), 
+                    color=colors[1], linewidth=2, marker='o')
+    if mean_res:
+        axs[1].plot(list(mean_res.keys()), list(mean_res.values()), 
+                    color=colors[1], linewidth=2, marker='o')
+    if mean_pls:
+        axs[2].plot(list(mean_pls.keys()), list(mean_pls.values()), 
+                    color=colors[1], linewidth=2, marker='o')
+
+    axs[0].set_ylabel('return latency (s)', color=markc, fontsize=12)
+    axs[1].set_ylabel('return efficiency', color=markc, fontsize=12)
+    axs[2].set_ylabel('pathlength (m)', color=markc, fontsize=12)
+
+    axs[0].tick_params(axis='both', labelsize=10)
+    axs[1].tick_params(axis='both', labelsize=10)      
+    axs[2].tick_params(axis='both', labelsize=10)
+ 
+   
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def tracking_over_time(folder_path, savename, size=(6,5), colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, nrows=3)
+    params_list = exp_parameters(folder_path)
+    all_lats = {}
+    all_res  = {}
+    all_pls = {}
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment    
+        _, di, do = inside_outside_odor(exp_df)    
+
+        exits = 0
+
+        lats, res, pls = [], [], []
+        for key, df in list(do.items())[:30]:
+            if return_to_edge(df) and df['seconds'].iloc[-1] - df['seconds'].iloc[0] < 200:
+                lat = df['seconds'].iloc[-1] - df['seconds'].iloc[0]     
+                dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+                pl = get_a_bout_calc(df, 'path_length')
+                if pl > 0:
+                    lats.append(lat) 
+                    re = dist/pl
+                    res.append(re)
+                    pls.append(pl/1000)
+                    exits += 1
+     
+        exits = np.arange(1, exits + 1)
+        axs[0].scatter(exits, lats, s=10, alpha=0.3, color=colors[1])
+        # axs[0].plot(exits, lats, color=colors[1], alpha=0.4, linewidth=0.8)
+
+        axs[1].scatter(exits, res, s=10, alpha=0.3, color=colors[1])
+        # axs[1].plot(exits, res, color=colors[1], alpha=0.4, linewidth=0.8)
+
+        axs[2].scatter(exits, pls, s=10, alpha=0.3, color=colors[1])
+        # axs[2].plot(exits, pls, color=colors[1], alpha=0.4, linewidth=0.8)
+
+        for i, (lat, re, pl) in enumerate(zip(lats, res, pls), start=1):
+            if i not in all_lats:
+                all_lats[i] = []
+                all_res[i]  = []
+                all_pls[i]  = []
+            all_lats[i].append(lat)
+            all_res[i].append(re)
+            all_pls[i].append(pl)
+    
+    mean_lats = {k: np.mean(v) for k, v in all_lats.items() if len(v) > 2}
+    mean_res = {k: np.mean(v) for k, v in all_res.items() if len(v) > 2}   
+    mean_pls = {k: np.mean(v) for k, v in all_pls.items() if len(v) > 2}   
+
+    if mean_lats:
+        axs[0].plot(list(mean_lats.keys()), list(mean_lats.values()), 
+                    color=colors[0], linewidth=2, marker='o')
+    if mean_res:
+        axs[1].plot(list(mean_res.keys()), list(mean_res.values()), 
+                    color=colors[0], linewidth=2, marker='o')
+    if mean_pls:
+        axs[2].plot(list(mean_pls.keys()), list(mean_pls.values()), 
+                    color=colors[0], linewidth=2, marker='o')
+
+    axs[0].set_ylabel('return latency (s)', color=markc, fontsize=12)
+    axs[1].set_ylabel('return efficiency', color=markc, fontsize=12)
+    axs[2].set_ylabel('pathlength (m)', color=markc, fontsize=12)
+
+    axs[0].tick_params(axis='both', labelsize=10)
+    axs[1].tick_params(axis='both', labelsize=10)      
+    axs[2].tick_params(axis='both', labelsize=10)
+ 
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def tracking_over_time_stats(folder_path, savename, size=(3,5), colors=['#c1ffc1', 'red']):
+    # IN PROGRESS!!
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=2)
+    params_list = exp_parameters(folder_path)
+    data = {metric: {'on': [], 'off': []} for metric in ['res', 'eas']}
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        _, d_in, d_out = inside_outside_odor(exp_df)
+        
+        res_on = []
+        res_off = []
+        for key, df in d_out.items():
+            dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+            pl = get_a_bout_calc(df, 'path_length')
+            if pl > 0:
+                re = dist/pl
+                if key-1 in d_on:
+                    print('light on')
+                    res_on.append(re)
+                else:
+                    print('light off')
+                    res_off.append(re)   
+        if len(res_on) > 0 and len(res_off) > 0:
+            data['res']['on'].append(sum(res_on)/len(res_on))
+            data['res']['off'].append(sum(res_off)/len(res_off))
+            axs[0].plot([0.7,1.2],[(sum(res_on)/len(res_on)), (sum(res_off)/len(res_off))], color=markc, linewidth=1, alpha=0.8)
+
+        ea_on = []
+        ea_off = []
+        for k in sorted(d_in.keys()):  
+            if k == 1: 
+                entry_df = get_entry_df(None, d_in[k], exp_df, window=0.5, first_entry=True)
+            else:  
+                entry_df = get_entry_df(d_out.get(k-1), d_in[k], exp_df, window=0.5)
+            if entry_df is not None:
+                if k-2 in sorted(d_on.keys()):
+                    circmean = circmean_heading(entry_df, ea_on)
+                else:
+                    circmean = circmean_heading(entry_df, ea_off)
+        if len(ea_on) > 1 and len(ea_off) > 1 and len(d_out) > 1:
+            print(filename)
+            data['eas']['on'].append(mean_resultant_vector_length(ea_on))
+            data['eas']['off'].append(mean_resultant_vector_length(ea_off))
+            axs[1].plot([0.7,1.2],[(mean_resultant_vector_length(ea_on)), (mean_resultant_vector_length(ea_off))], color=markc, linewidth=1, alpha=0.8)
+
+    datasets = [
+        (axs[0], 'res', 'return efficiency', (0.5, 1.5)),
+        (axs[1], 'eas', 'entry angle strength', (0.5, 1.5)),
+    ]
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = data[key]['on']
+        exp_vals = data[key]['off']
+
+        x_ctrl = np.random.normal(0.7, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(1.2, noise, size=len(exp_vals))
+        # ax.scatter(x_ctrl, ctrl_vals, color=colors[1], alpha=1)
+        # ax.scatter(x_exp, exp_vals, color=colors[0], alpha=0.4)
+
+        stat, p_value = wilcoxon(ctrl_vals, exp_vals, alternative='two-sided')
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1, max(max(ctrl_vals), max(exp_vals)) * 1.1,
+                p_text, ha='center', va='bottom', fontsize=10, color=markc)
+
+        mean_ctrl = np.mean(ctrl_vals) if ctrl_vals else 0
+        mean_exp = np.mean(exp_vals) if exp_vals else 0
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.plot([0.7,1.2], [mean_ctrl, mean_exp], color=colors[1], linewidth=3)
+        # ax.hlines(mean_ctrl, 0.6, 0.8, color=markc, linewidth=3)
+        # ax.hlines(mean_exp, 1.1, 1.3, color=markc, linewidth=3)
+        ax.errorbar(0.7, mean_ctrl, yerr=sem_ctrl, color=colors[1], capsize=0, linewidth=3)
+        ax.errorbar(1.2, mean_exp, yerr=sem_exp, color=colors[1], capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['on', 'off'], xticks=[0.7,1.2], ylabel=ylabel, xlim=xlim)
+
+    sns.despine(offset=10)
+    fig.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def dir_training_progression_cor(folder_path, savename, size=(3,5), colors=['lightgrey', '#7ed4e6']):
+    params_list = exp_parameters(folder_path)
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment  
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        if 'RL' in filename or 'LR' in filename or 'ctrl' in filename:
+            continue
+        if (exp_df['exp_phase'] == 3).any():
+            plume2_df = exp_df[exp_df['exp_phase'] == 3]
+            plume2_start = plume2_df[plume2_df['instrip']].index.min()
+            plume2_df = plume2_df.loc[plume2_start:]
+        else:
+            continue
+        _, di, do = inside_outside(plume1_df)
+
+        plume1_odor = plume1_df.loc[plume1_df.mfc3_stpt > 0]
+        plume2_odor = plume2_df.loc[plume2_df.mfc3_stpt > 0]
+
+        # dist1 = np.abs((plume1_odor['ft_posx'].iloc[-1] - plume1_odor['ft_posx'].iloc[0]) / 1000) * math.sqrt(2)
+        dist2 = np.abs((plume2_odor['ft_posx'].iloc[-1] - plume2_odor['ft_posx'].iloc[0]) / 1000) * math.sqrt(2)
+        
+        # ea = []
+        # for k in sorted(di.keys()):  
+        #     if k == 1: 
+        #         entry_df = get_entry_df(None, di[k], exp_df, window=0.5, first_entry=True)
+        #     else:  
+        #         entry_df = get_entry_df(do.get(k-1), di[k], exp_df, window=0.5)
+        #     if entry_df is not None:
+        #         circmean = circmean_heading(entry_df, ea)
+        # dist1 = (mean_resultant_vector_length(ea))
+
+        dur = []
+        for key, df in di.items():  
+            dur.append(df['seconds'].iloc[-1] - df['seconds'].iloc[0])
+        dist1 = sum(dur)/len(dur)
+
+        color = colors[0] if 'ctrl' in filename else colors[1]
+        plt.scatter(dist1, dist2, color=color)
+        print(f'dist1: {dist1}')
+        print(f'dist2: {dist2}')
+
+    plt.xlabel('cum. reinforcement duration (s)', color=markc)
+    plt.ylabel('distance tracked test  (m)', color=markc)
+    plt.tight_layout()
+    plt.show()
+
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+      
 def multiodor_zigzag_plotter_bw(folder_path, led, select_file=None, save=False):
     params_list = exp_parameters_multiodor(folder_path)
     if led == 'red':
@@ -951,6 +2799,7 @@ def training_plotter_bw(folder_path, led, select_file=None, save=False):
         # If a file is specified and the current file is not the specified one, skip to the next iteration
         if select_file and filename != select_file:
             continue
+        print(filename)
         fig, axs, markc = configure_white_plot(size=(8,8), xaxis=True)
         _, d_on, d_off = light_on_off(df)
         _, d_in, d_out = inside_outside_oct(df)
@@ -961,6 +2810,7 @@ def training_plotter_bw(folder_path, led, select_file=None, save=False):
         plume_df = plume_df.loc[plume_start:]
         plume_adj = 25 / np.sqrt(2)
         xplume = plume_df.iloc[0]['ft_posx'] - xo - plume_adj
+        print(plume_df.iloc[0]['ft_posx'])
         yplume = plume_df.iloc[0]['ft_posy'] - yo + plume_adj
         width=50
         height = (plume_df['ft_posx'].max() - plume_df['ft_posx'].min())  * np.sqrt(2)
@@ -968,12 +2818,15 @@ def training_plotter_bw(folder_path, led, select_file=None, save=False):
         axs.add_patch(plume)
         plt.plot(df['ft_posx'] - xo, df['ft_posy'] - yo, color='grey', label='clean air', linewidth=2)
         plt.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
-        plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=2)
+        if 'ctrl' in filename:
+            plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=plume_color, label='light on', linewidth=2)
+        else:
+            plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=2)
         savename = filename + '_odor_trajectory_white.pdf'
         #plt.legend()
         plt.title(filename, fontsize=14, color=markc)
-        axs.set_xlim(-500,1100)
-        axs.set_ylim(-200,1400)
+        # axs.set_xlim(-500,1100)
+        # axs.set_ylim(-200,1400)
         axs.set_xlabel('x-position (mm)', fontsize=14)
         axs.set_ylabel('y-position (mm)', fontsize=14)
         # Further customization
@@ -993,6 +2846,8 @@ def training_plotter_bw(folder_path, led, select_file=None, save=False):
             plt.savefig(os.path.join(figure_folder, savename))
         else:
             plt.show()
+
+
 
 def oct_training_return_efficiency(folder_path, savename, groups=2, multiodor=True, size=(3,5), labels=['L training', 'R training'], colors=['lightgrey', '#7ed4e6']):
     if multiodor:
@@ -1049,6 +2904,8 @@ def oct_training_return_efficiency(folder_path, savename, groups=2, multiodor=Tr
     data1 = returns['returns_r1']
     data2 = returns['returns_r2']
     stat, p_value = mannwhitneyu(data1, data2, alternative='two-sided')
+    print(len(data1))
+    print(len(data2))
 
     # Annotate p-value on the plot
     p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
@@ -1076,6 +2933,71 @@ def oct_training_return_efficiency(folder_path, savename, groups=2, multiodor=Tr
     if not os.path.exists(f'{folder_path}/fig/'):
         os.makedirs(f'{folder_path}/fig/')
     fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def oct_training_return_efficiency_ctrl(folder_path, savename, groups=4, size=(3,5), labels=['L ctrl', 'L exp', 'R ctrl', 'R exp'], colors=['lightgrey', '#7ed4e6'], alphas=[0.5, 0.5, 1, 1]):
+    params_list = exp_parameters(folder_path)
+    returns = {f'returns_r{i+1}': [] for i in range(groups)}
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        _, d_on, d_off = light_on_off(df)
+        _, d_in, d_out = inside_outside(df)
+        plume_df = d_off[list(d_off.keys())[-1]]
+        plume_start = plume_df[plume_df['instrip']].index.min()
+        plume_df = plume_df.loc[plume_start:]
+        _, d_in, d_out = inside_outside(plume_df)
+        pl = get_a_bout_calc(plume_df, 'path_length') / 1000
+        count = 0
+        for key, bout_df in d_out.items():
+            if bout_df['seconds'].iloc[-1] - bout_df['seconds'].iloc[0] >= 0.5 and return_to_edge_angle(bout_df, angle=-45):
+                count += 1
+        efficiency = count / pl if pl else 0
+        if 'LR' in filename and 'ctrl' in filename:
+            group_index = 0  # LR_ctrl
+        elif 'LR' in filename:
+            group_index = 1  # LR
+        elif 'RR' in filename and 'ctrl' in filename:
+            group_index = 2  # RR_ctrl
+        elif 'RR' in filename:
+            group_index = 3  # RR
+        else:
+            continue  # Skip unclassified files
+
+        returns[f'returns_r{group_index+1}'].append(efficiency)
+
+    averages = [np.mean(returns[f'returns_r{i+1}']) if returns[f'returns_r{i+1}'] else 0 for i in range(groups)]
+    std_devs = [np.std(returns[f'returns_r{i+1}']) if returns[f'returns_r{i+1}'] else 0 for i in range(groups)]
+    noise = 0.05
+    x_values = [np.random.normal(i+1, noise, size=len(returns[f'returns_r{i+1}'])) for i in range(groups)]
+    for i in range(groups):
+        plt.scatter(x_values[i], returns[f'returns_r{i+1}'], color=colors[i], alpha=alphas[i], label=labels[i])
+        plt.hlines(averages[i], xmin=i+0.9, xmax=i+1.1, colors=markc, linewidth=2)
+    axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color=markc, direction='out', left=True, bottom=True)
+    for pos in ['right', 'top']:
+        axs.spines[pos].set_visible(False)
+    plt.tight_layout()
+    sns.despine(offset=10)
+    for _, spine in axs.spines.items():
+        spine.set_linewidth(2)
+    for spine in axs.spines.values():
+        spine.set_edgecolor(markc)
+    axs.tick_params(axis='both', colors=markc)
+    plt.ylabel('returns per meter', fontsize=18, color=markc)
+    plt.yticks(fontsize=14, color=markc)
+    axs.set_xticks(range(1, groups+1))
+    axs.set_xticklabels(labels, fontsize=16, color=markc, rotation=45)
+    plt.xlim(0.5, groups + 0.5)
+    plt.tight_layout()
+    plt.show()
+    for i in range(groups):
+        group_name = labels[i]
+        return_list = returns[f'returns_r{i+1}']
+        print(f"\nGroup: {group_name} (n={len(return_list)})")
+        print(return_list)
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
 
 def oct_training_pre_isi(folder_path, savename, groups=2, multiodor=True, bout='in', size=(3,5), labels=['L training', 'R training'], colors=['lightgrey', '#7ed4e6']):
     if multiodor:
@@ -1130,6 +3052,8 @@ def oct_training_pre_isi(folder_path, savename, groups=2, multiodor=True, bout='
     if multiodor:
         avg_mch, std_mch = np.mean(isis_mch), np.std(isis_mch)
         avg_oct, std_oct = np.mean(isis_oct), np.std(isis_oct)
+        sem_mch = sem(isis_mch, nan_policy='omit')
+        sem_oct = sem(isis_oct, nan_policy='omit')
         noise = 0.05
         x_mch = np.random.normal(1, noise, size=len(isis_mch))
         x_oct = np.random.normal(2, noise, size=len(isis_oct))
@@ -1137,14 +3061,16 @@ def oct_training_pre_isi(folder_path, savename, groups=2, multiodor=True, bout='
         plt.scatter(x_oct, isis_oct, color=colors[1], alpha=0.8)
         plt.hlines(avg_mch, xmin=0.9, xmax=1.1, colors=markc, linewidth=2)  # Mean line
         plt.hlines(avg_oct, xmin=1.9, xmax=2.1, colors=markc, linewidth=2)  # Mean line
-        plt.errorbar(1, avg_mch, yerr=std_mch, color=markc, capsize=0)
-        plt.errorbar(2, avg_oct, yerr=std_oct, color=markc, capsize=0)
+        plt.errorbar(1, avg_mch, yerr=sem_mch, color=markc, capsize=0)
+        plt.errorbar(2, avg_oct, yerr=sem_oct, color=markc, capsize=0)
     else:
         avg_LR, std_LR = np.mean(isis_LR), np.std(isis_LR)
         avg_RR, std_RR = np.mean(isis_RR), np.std(isis_RR)
         avg_all, std_all = np.mean(all_isis), np.std(all_isis)
         print(avg_all)
         print(std_all)
+        sem_LR = sem(isis_LR, nan_policy='omit')
+        sem_RR = sem(isis_RR, nan_policy='omit')
         noise = 0.05
         x_LR = np.random.normal(1, noise, size=len(isis_LR))
         x_RR = np.random.normal(2, noise, size=len(isis_RR))
@@ -1152,8 +3078,8 @@ def oct_training_pre_isi(folder_path, savename, groups=2, multiodor=True, bout='
         plt.scatter(x_RR, isis_RR, color=colors[1], alpha=0.8)
         plt.hlines(avg_LR, xmin=0.9, xmax=1.1, colors=markc, linewidth=2)  # Mean line
         plt.hlines(avg_RR, xmin=1.9, xmax=2.1, colors=markc, linewidth=2)  # Mean line
-        plt.errorbar(1, avg_LR, yerr=std_LR, color=markc, capsize=0)
-        plt.errorbar(2, avg_RR, yerr=std_RR,  color=markc, capsize=0)
+        plt.errorbar(1, avg_LR, yerr=sem_LR, color=markc, capsize=0)
+        plt.errorbar(2, avg_RR, yerr=sem_RR,  color=markc, capsize=0)
     # Further customization
     axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
     for pos in ['right', 'top']:
@@ -1194,7 +3120,7 @@ def operant_training_pre_angles(folder_path, savename, multiodor=True, angle='en
         if multiodor:
             figure_folder, filename, df, df_odor1, df_odor2, df_light, exp_df, xo, yo, plume_colors = this_experiment
         else:
-            figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+            figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
             
         _, d_in, d_out = inside_outside_oct(df)
         _, d_on, d_off = light_on_off(df)
@@ -1260,6 +3186,95 @@ def operant_training_pre_angles(folder_path, savename, multiodor=True, angle='en
     if not os.path.exists(f'{folder_path}/fig/'):
         os.makedirs(f'{folder_path}/fig/')
     fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+
+def dual_odor_training_plotter(folder_path, led, select_file=None):
+    params_list = exp_parameters_multiodor(folder_path)
+    if led == 'none':
+        ledc = 'grey'
+    elif led == 'red':
+        ledc = '#ff355e'
+    elif led == 'green':
+        ledc = '#0bda51'
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor1, df_odor2, df_light, exp_df, xo, yo, plume_colors = this_experiment
+        if select_file and filename != select_file:
+            continue
+        fig, axs, markc = configure_white_plot(size=(10,10), xaxis=True)
+        plume1_df = exp_df[exp_df['exp_phase']==1]
+        plume1_start = plume1_df[plume1_df['instrip']].index.min()
+        plume1_df = plume1_df.loc[plume1_start:]
+        plume2_df = exp_df[exp_df['exp_phase']==3]
+        plume2_start = plume2_df[plume2_df['instrip']].index.min()
+        plume2_df = plume2_df.loc[plume2_start:]
+        plume3_df = exp_df[exp_df['exp_phase']==5]
+        plume3_start = plume3_df[plume3_df['instrip']].index.min()
+        plume3_df = plume3_df.loc[plume3_start:]
+    
+        train1 = exp_df[exp_df['exp_phase']==2]
+        train2 = exp_df[exp_df['exp_phase']==4]
+        print(filename)
+        print(train1.iloc[-1]['seconds'] - train1.iloc[0]['seconds'])
+        print(train2.iloc[-1]['seconds'] - train2.iloc[0]['seconds'])
+
+        plume_adj = 25 / np.sqrt(2)
+        width=50
+
+        mask1 = plume1_df['instrip'].fillna(False)
+        height1 = (plume1_df.loc[mask1, 'ft_posx'].max() - plume1_df.loc[mask1, 'ft_posx'].min()) * np.sqrt(2) + 30
+        mask2 = plume2_df['instrip'].fillna(False)
+        height2 = (plume2_df.loc[mask2, 'ft_posx'].max() - plume2_df.loc[mask2, 'ft_posx'].min()) * np.sqrt(2) + 30
+        mask3 = plume3_df['instrip'].fillna(False)
+        height3 = (plume3_df.loc[mask3, 'ft_posx'].max() - plume3_df.loc[mask3, 'ft_posx'].min()) * np.sqrt(2) + 30
+        angle1 = 45
+        angle2 = -45
+        if 'Rtest' in filename:
+            angle3 = -45
+            x3 = plume3_df.iloc[0]['ft_posx'] - xo - plume_adj
+            y3 = plume3_df.iloc[0]['ft_posy'] - yo + plume_adj
+        elif 'Ltest' in filename:
+            angle3 = 45
+            x3 = plume3_df.iloc[0]['ft_posx'] - xo - plume_adj
+            y3 = plume3_df.iloc[0]['ft_posy'] - yo - plume_adj
+        
+        x1 = plume1_df.iloc[0]['ft_posx'] - xo - plume_adj
+        y1 = plume1_df.iloc[0]['ft_posy'] - yo - plume_adj
+        x2 = plume2_df.iloc[0]['ft_posx'] - xo - plume_adj
+        y2 = plume2_df.iloc[0]['ft_posy'] - yo + plume_adj
+            
+        plume1 = patches.Rectangle((x1, y1),width,height1,angle=angle1,facecolor=plume_colors[1],alpha=0.5)
+        axs.add_patch(plume1)
+        plume2 = patches.Rectangle((x2, y2),width,height2,angle=angle2,facecolor=plume_colors[0],alpha=0.5)
+        axs.add_patch(plume2)
+        plume3 = patches.Rectangle((x3, y3),width,height3,angle=angle3,facecolor=plume_colors[1],alpha=0.5)
+        axs.add_patch(plume3)
+        
+        plt.plot(exp_df['ft_posx'] - xo, exp_df['ft_posy'] - yo, color='grey', label='clean air', linewidth=2)
+        # plt.plot(plume1_df['ft_posx'] - xo, plume1_df['ft_posy'] - yo, color='pink', label='clean air', linewidth=2)
+        # plt.plot(plume2_df['ft_posx'] - xo, plume2_df['ft_posy'] - yo, color='blue', label='clean air', linewidth=2)
+        # plt.plot(plume3_df['ft_posx'] - xo, plume3_df['ft_posy'] - yo, color='green', label='clean air', linewidth=2)
+        plt.plot(df_odor1['ft_posx'] - xo, df_odor1['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
+        plt.plot(df_odor2['ft_posx'] - xo, df_odor2['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=2)
+        plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=2)
+       
+        savename = filename + '_odor_trajectory.pdf'
+        plt.title(filename, fontsize=14, color=markc)
+        axs.set_xlabel('x-position (mm)', fontsize=14)
+        axs.set_ylabel('y-position (mm)', fontsize=14)
+        axs.tick_params(which='both', axis='both', labelsize=12, length=3, width=2, color='black', direction='out', left=True, bottom=True)
+        for pos in ['right', 'top']:
+            axs.spines[pos].set_visible(False)
+        plt.tight_layout()
+        sns.despine(offset=10)
+        for _, spine in axs.spines.items():
+            spine.set_linewidth(2)
+        for spine in axs.spines.values():
+            spine.set_edgecolor(markc)
+        axs.tick_params(axis='both', colors=markc)
+        axs.set_aspect('equal', adjustable='datalim') 
+        plt.tight_layout()
+        plt.savefig(os.path.join(figure_folder, savename))
 
 
 def multiodor_training_plotter_bw(folder_path, led, select_file=None, save=False):
@@ -1419,29 +3434,29 @@ def zigzag_return_efficiency(folder_path, savename, size=(3,5), colors=['lightgr
         # if 'ctrl' in filename:
         #     plt.plot([1,2], [returns1/pl1, returns2/pl2], color=colors[0], zorder=0)
     noise = 0.05
-    plt.scatter(1 + np.random.normal(0, noise, len(re1)), re1, color=colors[0])
-    plt.scatter(2 + np.random.normal(0, noise, len(re2c)), re2c, color=colors[1])
-    plt.scatter(3 + np.random.normal(0, noise, len(re2)), re2, color=colors[2])
+    plt.scatter(0.5 + np.random.normal(0, noise, len(re1)), re1, color=colors[0])
+    plt.scatter(1.2 + np.random.normal(0, noise, len(re2c)), re2c, color=colors[1])
+    plt.scatter(1.9 + np.random.normal(0, noise, len(re2)), re2, color=colors[2])
     # plt.scatter([1] * len(re1), re1, color=colors[0])
     # plt.scatter([2] * len(re2c), re2c, color=colors[1], edgecolor=colors[0])
     print(re1)
     print(re2c)
     print(re2)
-    avg_re1, std_re1 = np.mean(re1), np.std(re1)
-    avg_re2c, std_re2c = np.mean(re2c), np.std(re2c)
-    avg_re2, std_re2 = np.mean(re2), np.std(re2)
-    plt.hlines(avg_re1, 0.9, 1.1, colors=markc, linewidth=2)
-    plt.hlines(avg_re2c, 1.9, 2.1, colors=markc, linewidth=2)
-    plt.hlines(avg_re2, 2.9, 3.1, colors=markc, linewidth=2)
-    # plt.errorbar(1, avg_re1, yerr=std_re1, color=markc, capsize=0)
-    # plt.errorbar(2, avg_re2c, yerr=std_re2c, color=markc, capsize=0)
-    # plt.errorbar(3, avg_re2, yerr=std_re2, color=markc, capsize=0)
+    avg_re1, std_re1 = np.mean(re1), sem(re1)
+    avg_re2c, std_re2c = np.mean(re2c), sem(re2c)
+    avg_re2, std_re2 = np.mean(re2), sem(re2)
+    plt.hlines(avg_re1, 0.4, 0.6, colors=markc, linewidth=3)
+    plt.hlines(avg_re2c, 1.1, 1.3, colors=markc, linewidth=3)
+    plt.hlines(avg_re2, 1.8, 2.0, colors=markc, linewidth=3)
+    plt.errorbar(0.5, avg_re1, yerr=std_re1, color=markc, capsize=0, linewidth=3)
+    plt.errorbar(1.2, avg_re2c, yerr=std_re2c, color=markc, capsize=0, linewidth=3)
+    plt.errorbar(1.9, avg_re2, yerr=std_re2, color=markc, capsize=0, linewidth=3)
     plt.ylabel('returns per meter', fontsize=18, color=markc)
     plt.yticks(fontsize=14, color=markc)
     # axs.set_xticks([1,1.5,2.5])
     # axs.set_xticklabels(['plume 1', 'plume 2 (LED off)', 'plume 2 (LED on)'], fontsize=16, color=markc, rotation=45)
     axs.tick_params(axis='x', length=0)
-    plt.xlim(0.5, 3.5)
+    # plt.xlim(0.5, 3.5)
     plt.tight_layout()
     plt.show()
     if not os.path.exists(f'{folder_path}/fig/'):
@@ -1539,9 +3554,13 @@ def zigzag_return_efficiency_fc(folder_path, savename, size=(3,5), colors=['ligh
     plt.scatter(1 + np.random.normal(0, 0.05, len(re2c)), re2c, color=colors[0])
     plt.scatter(2 + np.random.normal(0, 0.05, len(re2)), re2, color=colors[1])
     plt.ylabel('plume 1: plume 2\nreturns per meter', fontsize=18, color=markc)
+    plt.hlines(re2c_mean, 0.9, 1.1, colors=markc, linewidth=3)
+    plt.hlines(re2_mean, 1.9, 2.1, colors=markc, linewidth=3)
+    plt.errorbar(1, re2c_mean, yerr=re2c_sem, color=markc, capsize=0, linewidth=3)
+    plt.errorbar(2, re2_mean, yerr=re2_sem, color=markc, capsize=0, linewidth=3)
     plt.yticks(fontsize=14, color=markc)
     axs.set_xticks([1, 2])
-    axs.set_xticklabels(['LED off', 'LED on'], fontsize=18, color=markc, rotation=45)
+    # axs.set_xticklabels(['LED off', 'LED on'], fontsize=18, color=markc, rotation=45)
     axs.tick_params(axis='x', length=0)
     plt.xlim(0.5, 2.5)
     plt.tight_layout()
@@ -1858,6 +3877,58 @@ def zigzag_alt_return_efficiency(folder_path, savename, size=(3,5), colors=['lig
     fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
 
 
+def zigzag_alt_return_efficiency_paired(folder_path, savename, size=(3,5), colors=['lightgrey', '#ff355e']):
+    params_list = exp_parameters(folder_path)
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=False)
+    re1_list, re2_list = [], []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment        
+        _, d_on, d_off = light_on_off(exp_df)
+        plume1_df = d_off[list(d_off.keys())[0]]
+        plume2_df = d_off[list(d_off.keys())[-1]]
+        _, d_in1, d_out1 = inside_outside_acv(plume1_df)
+        _, d_in2, d_out2 = inside_outside_acv(plume2_df)
+        re1s = []
+        re2s = []
+        for key, df in d_out1.items():
+            if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge_angle(df, angle=-45):
+                dist1 = get_a_bout_calc(df, 'furthest_distance_from_plume')
+                pl1 = get_a_bout_calc(df, 'path_length')
+                re1_bout = dist1/pl1
+                re1s.append(re1_bout)
+        for key, df in d_out2.items():
+            if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge_angle(df, angle=45):
+                dist2 = get_a_bout_calc(df, 'furthest_distance_from_plume')
+                pl2 = get_a_bout_calc(df, 'path_length')
+                re2_bout = dist2/pl2
+                re2s.append(re2_bout)
+        re1 = sum(re1s) / len(re1s)
+        re2 = sum(re2s) / len(re2s)
+        re1_list.append(re1)
+        re2_list.append(re2)
+        plt.plot([1,2], [re1, re2], color=colors[0], zorder=20)
+    plt.scatter([1] * len(re1_list), re1_list, color=colors[0], zorder=20)
+    plt.scatter([2] * len(re2_list), re2_list, color=colors[1], zorder=20)
+    re1_array, re2_array = np.array(re1_list), np.array(re2_list)
+    avg1, sem1 = np.mean(re1_array), sem(re1_array)
+    avg2, sem2 = np.mean(re2_array), sem(re2_array)
+    stat, p_value = wilcoxon(re1_array, re2_array)
+    p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+    axs.text(1.5, max(max(re1_array, default=0), max(re2_array, default=0)) * 1.1, p_text,
+         ha='center', va='bottom', fontsize=14, color=markc)
+    plt.ylabel('return efficiency', fontsize=18, color=markc)
+    plt.yticks(fontsize=14, color=markc)
+    plt.xticks(fontsize=14, color=markc)
+    axs.tick_params(axis='x', length=0)         
+    axs.set_xticklabels([])   
+    plt.xlim(0.5, 2.5)
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
 def zigzag_entry_angles_all(folder_path, savename, size=(5, 5), colors=['lightgrey', '#ff355e']):
     all_plume1_bout = []
     all_plume2_bout = []
@@ -2033,9 +4104,7 @@ def return_efficiency(folder_path, savename, size=(3,5), groups=2, keywords = ['
 
 
 
-def plume_onset_uws(folder_path, savename, multiodor=True, size=(6,5), sample_rate=20, buf_pts=4,
-                    keywords=['no training', 'L training', 'R training'],
-                    colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+def plume_onset_uws(folder_path, savename, multiodor=True, size=(6,5), sample_rate=20, buf_pts=4, keywords=['no training', 'L training', 'R training'], colors=['lightgrey', '#c1ffc1', '#6f00ff']):
     fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
     time = np.linspace(-buf_pts, buf_pts, buf_pts * sample_rate * 2)
     uws_traces = {kw: [] for kw in keywords}
@@ -2059,13 +4128,14 @@ def plume_onset_uws(folder_path, savename, multiodor=True, size=(6,5), sample_ra
                 _, d_in, d_out = inside_outside(plume_df)
                 first_key = list(d_in.keys())[0]
                 df_in = d_in[first_key]
-                if 'LR' in filename or 'mch' in filename:
+                # if '45_ctrl' in filename:
+                #     key = keywords[0]
+                #     print(filename)
+                if ('LR' in filename and 'ctrl' not in filename) or 'mch' in filename:
                     key = keywords[1]
-                elif 'RR' in filename:
+                elif ('RR' in filename and 'ctrl' not in filename):
                     key = keywords[2]
-                else:
-                    key = keywords[0]
-            else:
+            elif 'ctrl' in filename:
                 first_key = list(di.keys())[0]
                 df_in = di[first_key]
                 key = keywords[0]
@@ -2191,9 +4261,7 @@ def oct_training_plume_onset_traj(folder_path, savename, multiodor=True, size=(6
         os.makedirs(f'{folder_path}/fig/')
     fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
 
-def avg_plume_onset_uws(folder_path, savename, multiodor=True, size=(6,5), sample_rate=10, buf_pts=4,
-                        keywords=['no training', 'L training', 'R training'],
-                        colors=['lightgrey', '#c1ffc1', '#6f00ff']):
+def avg_plume_onset_uws(folder_path, savename, multiodor=True, size=(6,5), sample_rate=10, buf_pts=4, keywords=['no training', 'L training', 'R training'], colors=['lightgrey', '#c1ffc1', '#6f00ff']):
     fig, axs, markc = configure_bw_plot(size=size, xaxis=False)
     uws_avg = {kw: [] for kw in keywords}
     if multiodor:
@@ -2215,13 +4283,14 @@ def avg_plume_onset_uws(folder_path, savename, multiodor=True, size=(6,5), sampl
                 _, d_in, d_out = inside_outside(plume_df)
                 first_key = list(d_in.keys())[0]
                 df_in = d_in[first_key]
-                if 'LR' in filename or 'mch' in filename:
+                # if '45_ctrl' in filename:
+                #     key = keywords[0]
+                if (('LR' in filename or 'RL' in filename) and ('ctrl' not in filename)) or 'mch' in filename:
                     key = keywords[1]
-                elif 'RR' in filename:
-                    key = keywords[2]
-                else:
-                    key = keywords[0]
-            else:
+                elif ('RR' in filename or 'LL' in filename) and ('ctrl' not in filename):
+                    key = keywords[2]      
+            elif 'ctrl' in filename:
+                print(filename)
                 first_key = list(di.keys())[0]
                 df_in = di[first_key]
                 key = keywords[0]
@@ -2330,6 +4399,73 @@ def disappearing_cw_vs_uw(folder_path, savename, keyword='light', size=(5,5)):
     plt.ylabel('crosswind displacement (mm)', fontsize=18, color=markc)
     plt.xticks(fontsize=14, color='white')
     plt.yticks(fontsize=14, color='white')
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def CM_disappearing_memory(folder_path, savename, color, size=(5,5)):
+    fig, axs, markc = configure_white_plot(size=size, xaxis=True, ncols=2)
+    params_list = exp_parameters(folder_path)
+    entries_list,  strengths_list, perc_list = [], [], []
+
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        d, d_in, d_out = inside_outside(exp_df)
+        last_out_key = list(d_out.keys())[-1]
+        off_df = d_out[last_out_key]
+        print(filename)
+
+        num_entries = len(d_in) - 1
+
+        def circ_diff_deg(a, b):
+            return (a - b + 180) % 360 - 180
+        
+        angle, strength = compute_mean_entry_heading(d_out, imaging=False)
+        angle = np.rad2deg(angle)
+
+        entry_angle = float(angle)  # make sure it's scalar in degrees
+        off_df['ft_heading'] = np.rad2deg(off_df['ft_heading'])
+        off_heading = off_df['ft_heading'].astype(float).to_numpy()
+
+        diff = np.abs(circ_diff_deg(off_heading, entry_angle))
+        mask = diff <= 22.5
+        percentage_in_window = (mask.sum() / len(off_heading)) * 100
+        print(f'percentage of frames in 45º wedge: {percentage_in_window:.2f}%')
+
+        entries_list.append(num_entries)
+        strengths_list.append(strength)
+        perc_list.append(percentage_in_window)
+
+        # plot entries vs. travel %
+        axs[0].scatter(num_entries, percentage_in_window, color=color)
+        axs[0].set_title('time in wedge vs. number of entries', color=markc, fontsize=14)
+        axs[0].set_xlabel('number of entries', color=markc, fontsize=12)
+        axs[0].set_ylabel('% time in wedge', color=markc, fontsize=12)
+        # plot entry angle strength vs. travel %
+        axs[1].scatter(strength, percentage_in_window, color=color)
+        axs[1].set_title('time in wedge vs. entry angle strength', color=markc, fontsize=14)
+        axs[1].set_xlabel('mean resultant vector', color=markc, fontsize=12)
+        axs[1].set_ylabel('% time in wedge', color=markc, fontsize=12)
+
+    x1 = np.asarray(entries_list, dtype=float)
+    x2 = np.asarray(strengths_list, dtype=float)
+    y  = np.asarray(perc_list, dtype=float)
+
+    m1, b1, r2_1 = linregress_r2(x1, y)
+    m2, b2, r2_2 = linregress_r2(x2, y)
+
+    if np.isfinite(r2_1):
+        xs = np.linspace(x1.min(), x1.max(), 100)
+        axs[0].plot(xs, m1*xs + b1, linewidth=1.5, color=markc)
+    if np.isfinite(r2_2):
+        xs = np.linspace(x2.min(), x2.max(), 100)
+        axs[1].plot(xs, m2*xs + b2, linewidth=1.5, color=markc)
+
+    print(r2_1)
+    print(r2_2)
     plt.tight_layout()
     plt.show()
     if not os.path.exists(f'{folder_path}/fig/'):
@@ -2727,6 +4863,7 @@ def pulse_return_efficiency(folder_path, savename, size=(5, 5), groups=2, colors
     if not os.path.exists(f'{folder_path}/fig/'):
         os.makedirs(f'{folder_path}/fig/')
     fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
 
 def pulse_entry_angle(folder_path, savename, size=(5, 5), colors=['white', 'red']):
     fig, axs, markc = configure_bw_polar(size=size, grid=False)
@@ -3697,44 +5834,434 @@ def disappearing_bias_minutes(folder_path):
     # axs.legend()
     plt.show()
 
-def get_a_bout_calc(df, data_type):
-    def path_length(x, y):
-        n = len(x)
-        lv = [np.sqrt((x[i]-x[i-1])**2 + (y[i]-y[i-1])**2) for i in range (1,n)]
-        lt = np.cumsum(lv)
-        L = sum(lv)
-        return lt, L
+def oct_acv_comparisons(folder_path, savename, size=(3,5), side='inside', colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=4)
+    params_list = exp_parameters(folder_path)
+    data = {metric: {'acv': [], 'oct': []} for metric in ['speed', 'uw_dist', 'pl', 'time']}
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        group = 'oct' if 'oct' in filename else 'acv'
+        _, d_in, d_out = inside_outside_odor(exp_df)
+        if len(d_in) < 3:
+            continue
+        if side == 'inside':
+            bout_dict = d_in
+        elif side == 'outside':
+            bout_dict = d_out
 
-    # Based on the string input 'data_type', return a specified calculation
-    if data_type == 'x_distance_from_plume':
-        return df['ft_posx'].max() - df['ft_posx'].min()
-    if data_type == 'duration':
-        duration = df['timestamp'].iloc[-1] - df['timestamp'].iloc[0]
-        return duration.total_seconds()
-    if data_type == 'avg_speed':
-        return df['speed'].mean()
-    if data_type == 'path_length':
-        df.reset_index(drop=True, inplace=True)
-        lt, pl = path_length(df.ft_posx, df.ft_posy)
-        return pl
-    if data_type == 'tortuosity':
-        df.reset_index(drop=True, inplace=True)
-        lt, pl = path_length(df.ft_posx, df.ft_posy)
-        x_i = df['ft_posx'].iloc[0]
-        x_f = df['ft_posx'].iloc[-1]
-        y_i = df['ft_posy'].iloc[0]
-        y_f = df['ft_posy'].iloc[-1]
-        disp = ((x_f - x_i)**2 + (y_f - y_i)**2)**0.5
-        tort = pl / disp
-        return tort
-    if data_type == 'furthest_distance_from_plume':
-        x1, y1 = df['ft_posx'].iloc[0], df['ft_posy'].iloc[0]
-        x2, y2 = df['ft_posx'].iloc[-1], df['ft_posy'].iloc[-1]
-        distances = np.abs((y2 - y1) * df['ft_posx'] - (x2 - x1) * df['ft_posy'] + x2 * y1 - y2 * x1) / np.sqrt((y2 - y1)**2 + (x2 - x1)**2)
-        dist = distances.max()
-        return dist
-    return None
+        speed_vals, uw_dists, pl_vals, time_vals = [], [], [], []
+        for key, bout_df in bout_dict.items():
+            speed_vals.append(float(bout_df['speed'].mean()))
+            uw_dists.append(float(bout_df['ft_posx'].iloc[-1] - bout_df['ft_posx'].iloc[0]))
+            pl_vals.append(float(get_a_bout_calc(bout_df, 'path_length')/1000))
+            time_vals.append(float(get_a_bout_calc(bout_df, 'duration')))
+        
+        metrics = {
+                'speed': float(np.mean(speed_vals)),
+                'uw_dist': float(np.mean(uw_dists)),
+                'pl': float(np.mean(pl_vals)),
+                'time': float(np.mean(time_vals)),
+            }
+        for metric, value in metrics.items():
+            if np.isfinite(value):
+                data[metric][group].append(value)
+    datasets = [
+        (axs[0], 'speed', f'{side} speed (mm/s)', (0.5, 1.5)),
+        (axs[1], 'uw_dist', f'{side} upwind distance (mm)', (0.5, 1.5)),
+        (axs[2], 'pl', f'{side} pathlength (m)', (0.5, 1.5)),
+        (axs[3], 'time', f'{side} time (s)', (0.5, 1.5)),
+    ]
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = data[key]['acv']
+        exp_vals = data[key]['oct']
 
+        x_ctrl = np.random.normal(0.7, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(1.2, noise, size=len(exp_vals))
+        ax.scatter(x_ctrl, ctrl_vals, color=colors[0], alpha=0.6)
+        ax.scatter(x_exp, exp_vals, color=colors[1], alpha=0.6)
+
+        stat, p_value = mannwhitneyu(ctrl_vals, exp_vals, alternative='two-sided')
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1, max(max(ctrl_vals), max(exp_vals)) * 1.1,
+                p_text, ha='center', va='bottom', fontsize=10, color=markc)
+
+        mean_ctrl = np.mean(ctrl_vals) if ctrl_vals else 0
+        mean_exp = np.mean(exp_vals) if exp_vals else 0
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.hlines(mean_ctrl, 0.6, 0.8, color=markc, linewidth=3)
+        ax.hlines(mean_exp, 1.1, 1.3, color=markc, linewidth=3)
+        ax.errorbar(0.7, mean_ctrl, yerr=sem_ctrl, color=markc, capsize=0, linewidth=3)
+        ax.errorbar(1.2, mean_exp, yerr=sem_exp, color=markc, capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['acv', 'oct'], xticks=[0.7,1.2], ylabel=ylabel, xlim=xlim)
+
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+        
+def oct_led_comparisons(folder_path, savename, size=(3,5), colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=4)
+    params_list = exp_parameters(folder_path)
+    data = {metric: {'on': [], 'off': []} for metric in ['res', 'eas', 'dists', 'pls']}
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        _, d_in, d_out = inside_outside_odor(exp_df)
+        _, d_on, d_off = light_on_off(exp_df)
+        if len(d_on) <= 1:
+            continue
+        
+        res_on, ea_on, pls_on, dists_on = [],[],[],[]
+        res_off, ea_off, pls_off, dists_off = [],[],[],[]
+
+        for key, df in d_out.items():
+            if return_to_edge(df):
+                dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+                xdist = get_a_bout_calc(df, 'x_distance_from_plume') 
+                pl = get_a_bout_calc(df, 'path_length')
+                if pl > 0:
+                    re = dist/pl
+                    if key-1 in d_on:
+                        res_on.append(re)
+                        dists_on.append(dist)
+                        pls_on.append(pl/1000)
+                    else:
+                        res_off.append(re)   
+                        dists_off.append(dist)
+                        pls_off.append(pl/1000)
+
+        if len(res_on) > 0 and len(res_off) > 0:
+            data['res']['on'].append(sum(res_on)/len(res_on))
+            data['res']['off'].append(sum(res_off)/len(res_off))
+            axs[0].plot([0.7,1.2],[(sum(res_on)/len(res_on)), (sum(res_off)/len(res_off))], color=markc, linewidth=1, alpha=0.8)
+        if len(res_on) > 0 and len(res_off) > 0:
+            data['pls']['on'].append(sum(pls_on)/len(pls_on))
+            data['pls']['off'].append(sum(pls_off)/len(pls_off))
+            axs[2].plot([0.7,1.2],[(sum(pls_on)/len(pls_on)), (sum(pls_off)/len(pls_off))], color=markc, linewidth=1, alpha=0.8)
+        if len(res_on) > 0 and len(res_off) > 0:
+            data['dists']['on'].append(sum(dists_on)/len(dists_on))
+            data['dists']['off'].append(sum(dists_off)/len(dists_off))
+            axs[3].plot([0.7,1.2],[(sum(dists_on)/len(dists_on)), (sum(dists_off)/len(dists_off))], color=markc, linewidth=1, alpha=0.8)
+        
+        
+
+        for k in sorted(d_in.keys()):  
+            if k == 1: 
+                entry_df = get_entry_df(None, d_in[k], exp_df, window=0.5, first_entry=True)
+            else:  
+                entry_df = get_entry_df(d_out.get(k-1), d_in[k], exp_df, window=0.5)
+            if entry_df is not None:
+                if k-2 in sorted(d_on.keys()):
+                    circmean = circmean_heading(entry_df, ea_on)
+                else:
+                    circmean = circmean_heading(entry_df, ea_off)
+
+        if len(ea_on) > 1 and len(ea_off) > 1 and len(d_out) > 1:
+            data['eas']['on'].append(mean_resultant_vector_length(ea_on))
+            data['eas']['off'].append(mean_resultant_vector_length(ea_off))
+            axs[1].plot([0.7,1.2],[(mean_resultant_vector_length(ea_on)), (mean_resultant_vector_length(ea_off))], color=markc, linewidth=1, alpha=0.8)
+    
+    print(data)
+    datasets = [
+        (axs[0], 'res', 'return efficiency', (0.5, 1.5)),
+        (axs[1], 'eas', 'entry angle strength', (0.5, 1.5)),
+        (axs[2], 'pls', 'pathlength(m)', (0.5, 1.5)),
+        (axs[3], 'dists', 'dist. from plume (mm)', (0.5, 1.5)),
+    ]
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = data[key]['on']
+        exp_vals = data[key]['off']
+
+        x_ctrl = np.random.normal(0.7, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(1.2, noise, size=len(exp_vals))
+
+        stat, p_value = wilcoxon(ctrl_vals, exp_vals, alternative='two-sided')
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1, max(max(ctrl_vals), max(exp_vals)) * 1.1,
+                p_text, ha='center', va='bottom', fontsize=10, color=markc)
+
+        mean_ctrl = np.mean(ctrl_vals) if ctrl_vals else 0
+        mean_exp = np.mean(exp_vals) if exp_vals else 0
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.plot([0.7,1.2], [mean_ctrl, mean_exp], color=colors[1], linewidth=3)
+        ax.errorbar(0.7, mean_ctrl, yerr=sem_ctrl, color=colors[1], capsize=0, linewidth=3)
+        ax.errorbar(1.2, mean_exp, yerr=sem_exp, color=colors[1], capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['on', 'off'], xticks=[0.7,1.2], ylabel=ylabel, xlim=xlim)
+
+    sns.despine(offset=10)
+    fig.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def oct_led_re_scatter(folder_path, savename, size=(3,5), colors=['lightgrey', '#ff355e']):
+    params_list = exp_parameters(folder_path)
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True)
+    dist1_list, pl1_list = [], []
+    dist2_list, pl2_list = [], []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment     
+        _, d_in, d_out = inside_outside_odor(exp_df)   
+        _, d_on, d_off = light_on_off(exp_df)
+        if len(d_on) <= 1:
+            continue
+
+        for key, df in d_out.items():
+            if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 0.5 and return_to_edge(df):
+                dist = get_a_bout_calc(df, 'furthest_distance_from_plume')
+                pl = get_a_bout_calc(df, 'path_length')
+                if key-1 in d_on:
+                    plt.scatter(dist, dist/pl, color=colors[1], alpha=0.8)
+                    dist2_list.append(dist)
+                    pl2_list.append(dist/pl)
+                else:
+                    plt.scatter(dist, dist/pl, color=colors[0], alpha=0.8)
+                    dist1_list.append(dist)
+                    pl1_list.append(dist/pl)
+       
+    dist1_array, pl1_array = np.array(dist1_list), np.array(pl1_list)
+    dist2_array, pl2_array = np.array(dist2_list), np.array(pl2_list)
+    if len(dist1_array) > 1:
+        slope1, intercept1, r1, _, _ = linregress(dist1_array, pl1_array)
+        r2_off = r1 ** 2
+        x_fit1 = np.linspace(min(dist1_array), max(dist1_array), 100)
+        y_fit1 = slope1 * x_fit1 + intercept1
+        plt.plot(x_fit1, y_fit1, color=colors[0], linestyle='-', linewidth=2, label='LED off')
+    if len(dist2_array) > 1:
+        slope2, intercept2, r2, _, _ = linregress(dist2_array, pl2_array)
+        r2_on = r2 ** 2
+        x_fit2 = np.linspace(min(dist2_array), max(dist2_array), 100)
+        y_fit2 = slope2 * x_fit2 + intercept2
+        plt.plot(x_fit2, y_fit2, color=colors[1], linestyle='-', linewidth=2, label='LED on')
+    print(f"LED off  : R² = {r2_off:.4f}")
+    print(f"LED on   : R² = {r2_on:.4f}")
+    plt.ylabel('return efficiency', fontsize=16, color=markc)
+    plt.xlabel('furthest distance from plume (mm)', fontsize=16, color=markc)
+    plt.yticks(fontsize=14, color=markc)
+    plt.xticks(fontsize=14, color=markc)
+    # axs.plot(np.linspace(0, 1000, 100), 2*(np.linspace(0, 1000, 100)), linestyle='--', color=markc)
+    axs.set_xlim(-10, 200)
+    axs.set_ylim(0, 0.5)
+    legend = plt.legend(prop={'size': 10}, frameon=False)
+    plt.setp(legend.get_texts(), color=markc)
+    plt.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def oct_pulse_comparisons(folder_path, savename, size=(3,5), colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=4)
+    params_list = exp_parameters(folder_path)
+    data = {metric: {'single': [], 'multi': []} for metric in ['rpm', 'res', 'eas', 'lats']}
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        _, d_in, d_out = inside_outside_odor(exp_df)
+        _, d_on, d_off = light_on_off(exp_df)
+      
+        if len(d_on) == 1 and len(d_out) > 3:
+            group = 'single'
+        elif len(d_on) > 1 and len(d_out) > 3:
+            group='multi'
+
+        data['rpm'][group].append((len(d_in)-1) / (get_a_bout_calc(exp_df, 'path_length')/1000))
+
+        res = []
+        for key, df in d_out.items():
+            dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+            pl = get_a_bout_calc(df, 'path_length')
+            if pl > 0:
+                re = dist/pl
+                res.append(re)
+        data['res'][group].append(sum(res)/len(res))
+        
+        ea = []
+        for k in sorted(d_in.keys()):  
+            if k == 1: 
+                entry_df = get_entry_df(None, d_in[k], exp_df, window=0.5, first_entry=True)
+            else:  
+                entry_df = get_entry_df(d_out.get(k-1), d_in[k], exp_df, window=0.5)
+            if entry_df is not None:
+                circmean = circmean_heading(entry_df, ea)
+        data['eas'][group].append(mean_resultant_vector_length(ea))
+        
+        lats = []
+        for key, df in d_out.items():
+            lat = df['seconds'].iloc[-1] - df['seconds'].iloc[0]
+            lats.append(lat)      
+        lats_avg = sum(lats) / len(lats)
+        data['lats'][group].append(lats_avg)
+
+    datasets = [
+        (axs[0], 'rpm', 'returns per meter', (0.5, 1.5)),
+        (axs[1], 'res', 'return efficiency', (0.5, 1.5)),
+        (axs[2], 'eas', 'entry angle strength', (0.5, 1.5)),
+        (axs[3], 'lats', 'return latency (s)', (0.5, 1.5)),
+    ]
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = data[key]['single']
+        exp_vals = data[key]['multi']
+
+        x_ctrl = np.random.normal(0.7, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(1.2, noise, size=len(exp_vals))
+        ax.scatter(x_ctrl, ctrl_vals, color=colors[1], alpha=0.4)
+        ax.scatter(x_exp, exp_vals, color=colors[1])
+
+        stat, p_value = mannwhitneyu(ctrl_vals, exp_vals, alternative='two-sided')
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1, max(max(ctrl_vals), max(exp_vals)) * 1.1,
+                p_text, ha='center', va='bottom', fontsize=10, color=markc)
+
+        mean_ctrl = np.mean(ctrl_vals) if ctrl_vals else 0
+        mean_exp = np.mean(exp_vals) if exp_vals else 0
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.hlines(mean_ctrl, 0.6, 0.8, color=markc, linewidth=3)
+        ax.hlines(mean_exp, 1.1, 1.3, color=markc, linewidth=3)
+        ax.errorbar(0.7, mean_ctrl, yerr=sem_ctrl, color=markc, capsize=0, linewidth=3)
+        ax.errorbar(1.2, mean_exp, yerr=sem_exp, color=markc, capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['single', 'multi'], xticks=[0.7,1.2], ylabel=ylabel, xlim=xlim)
+
+    sns.despine(offset=10)
+    fig.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def oct_time_comparisons(folder_path, savename, size=(3,5), colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=5)
+    params_list = exp_parameters(folder_path)
+    
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        _, d_in, d_out = inside_outside_odor(exp_df)
+        _, d_on, d_off = light_on_off(exp_df)
+        if len(d_on) < 3:
+            continue
+        data = {metric: [] for metric in ['rpm', 'res', 'eas', 'lats', 'dist']}
+        
+        dur = 0
+        for key, df in d_on.items():
+            dur += df['seconds'].iloc[-1] - df['seconds'].iloc[0]
+
+        data['rpm'].append((len(d_in)-1) / (get_a_bout_calc(exp_df, 'path_length')/1000))
+        data['dist'].append((df_odor['ft_posy'].max() - df_odor['ft_posy'].min())/1000)
+
+        res = []
+        for key, df in d_out.items():
+            dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+            pl = get_a_bout_calc(df, 'path_length')
+            if pl > 0:
+                re = dist/pl
+                res.append(re)
+        data['res'].append(sum(res)/len(res))
+        
+        ea = []
+        for k in sorted(d_in.keys()):  
+            if k == 1: 
+                entry_df = get_entry_df(None, d_in[k], exp_df, window=0.5, first_entry=True)
+            else:  
+                entry_df = get_entry_df(d_out.get(k-1), d_in[k], exp_df, window=0.5)
+            if entry_df is not None:
+                circmean = circmean_heading(entry_df, ea)
+        data['eas'].append(mean_resultant_vector_length(ea))
+        
+        lats = []
+        for key, df in d_out.items():
+            lat = df['seconds'].iloc[-1] - df['seconds'].iloc[0]
+            lats.append(lat)      
+        lats_avg = sum(lats) / len(lats)
+        data['lats'].append(lats_avg)
+
+        datasets = [
+            (axs[0], 'rpm', 'returns per meter', colors[0]),
+            (axs[1], 'res', 'return efficiency',  colors[1]),
+            (axs[2], 'eas', 'entry angle strength',  colors[2]),
+            (axs[3], 'lats', 'return latency (s)',  colors[3]),
+            (axs[4], 'dist', 'distance tracked (m)',  colors[4])
+        ]
+
+        for ax, key, ylabel, color in datasets:
+            ax.scatter(dur, sum(data[key])/len(data[key]), color=color)
+            ax.set_ylabel(ylabel, fontsize=14, color=markc)
+            ax.set_xlabel('reinforcement dur. (s)', fontsize=14)
+        
+    sns.despine(offset=10)
+    fig.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def oct_dist_comparisons(folder_path, savename, size=(3,5), colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_bw_plot(size=size, xaxis=True, ncols=5)
+    params_list = exp_parameters(folder_path)
+    
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        _, d_in, d_out = inside_outside_odor(exp_df)
+        _, d_on, d_off = light_on_off(exp_df)
+        if len(d_on) < 3:
+            continue
+        data = {metric: [] for metric in ['rpm', 'res', 'eas', 'lats', 'dist']}
+
+        dist = 0
+        for key, df in d_on.items():
+            dist += df['ft_posy'].iloc[-1] - df['ft_posy'].iloc[0]
+
+        data['rpm'].append((len(d_in)-1) / (get_a_bout_calc(exp_df, 'path_length')/1000))
+        data['dist'].append((df_odor['ft_posy'].max() - df_odor['ft_posy'].min())/1000)
+
+        res = []
+        for key, df in d_out.items():
+            dist = get_a_bout_calc(df, 'furthest_distance_from_plume') 
+            pl = get_a_bout_calc(df, 'path_length')
+            if pl > 0:
+                re = dist/pl
+                res.append(re)
+        data['res'].append(sum(res)/len(res))
+        
+        ea = []
+        for k in sorted(d_in.keys()):  
+            if k == 1: 
+                entry_df = get_entry_df(None, d_in[k], exp_df, window=0.5, first_entry=True)
+            else:  
+                entry_df = get_entry_df(d_out.get(k-1), d_in[k], exp_df, window=0.5)
+            if entry_df is not None:
+                circmean = circmean_heading(entry_df, ea)
+        data['eas'].append(mean_resultant_vector_length(ea))
+        
+        lats = []
+        for key, df in d_out.items():
+            lat = df['seconds'].iloc[-1] - df['seconds'].iloc[0]
+            lats.append(lat)      
+        lats_avg = sum(lats) / len(lats)
+        data['lats'].append(lats_avg)
+
+        datasets = [
+            (axs[0], 'rpm', 'returns per meter', colors[0]),
+            (axs[1], 'res', 'return efficiency',  colors[1]),
+            (axs[2], 'eas', 'entry angle strength',  colors[2]),
+            (axs[3], 'lats', 'return latency (s)',  colors[3]),
+            (axs[4], 'dist', 'distance tracked (m)',  colors[4])
+        ]
+
+        for ax, key, ylabel, color in datasets:
+            ax.scatter(dist, sum(data[key])/len(data[key]), color=color)
+            ax.set_ylabel(ylabel, fontsize=14, color=markc)
+            ax.set_xlabel('reinforcement dist. (mm)', fontsize=14)
+        
+    sns.despine(offset=10)
+    fig.tight_layout()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
 
 def store_bout_data(strip_dict, data_type, strip_status='in', hist=True):
     # Based on the string input 'data_type' and the location of the fly
@@ -3869,3 +6396,713 @@ def plot_circmean_heading(df, means_list):
         circmean_value = stats.circmean(df.ft_heading, low=-np.pi, high=np.pi, axis=None, nan_policy='omit')
         means_list.append(circmean_value)
         return circmean_value
+
+def jumping_comparisons(folder_path, savename, size=(3,5), groups=2, keywords = ['ctrl', 'ablated'], colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_white_plot(size=size, xaxis=False, ncols=groups)
+    paired_data = {metric: {} for metric in ['returns_new', 'returns_old', 'speeds', 'fvel', 'angvels']}
+    params_list = exp_parameters(folder_path)
+    time_stamps = {} 
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        d, d_in, d_out = inside_outside(exp_df)
+        pl = get_a_bout_calc(exp_df, 'path_length') / 1000
+        returns = len(d_in) - 1
+        tort = get_a_bout_calc(df, 'tortuosity')
+        speed = np.mean(df['speed'])
+        fvel = np.mean(df['y-vel'])
+        angvel = np.mean(df['abs_angvel'])
+        ydisp = (df['ft_posy'].max() - df['ft_posy'].min()) / 1000
+
+        # Extract Fly# using regex
+        match = re.search(r'Fly(\d+)', filename)
+        if not match:
+            continue
+        fly_id = int(match.group(1))
+        label  = 'ctrl' if keywords[0] in filename else 'exp'
+        t_match = re.search(r'(\d{8}-\d{6})', filename)
+        if t_match:
+            ts_str = t_match.group(1)
+            ts = datetime.datetime.strptime(ts_str, '%m%d%Y-%H%M%S')
+            time_stamps.setdefault(fly_id, {})[label] = ts
+        
+        for metric, value in (
+            ("returns_old", returns / pl),
+            ("returns_new", returns / ydisp),
+            ("speeds", speed),
+            ("fvel", fvel),
+            ("angvels", angvel),
+        ):
+            paired_data[metric].setdefault(fly_id, {})[label] = value
+
+    datasets = [
+        (axs[4], 'returns_old', 'returns per meter ', (0.8, 2.2)),
+        (axs[3], 'returns_new', 'returns per meter upwind', (0.8, 2.2)),
+        (axs[2], 'speeds', 'avg. speed (mm/s)', (0.8, 2.2)),
+        (axs[1], 'fvel', 'upwind speed (mm/s)', (0.8, 2.2)),
+        (axs[0], 'angvels', 'ang. velocity (rad/s)', (0.8, 2.2))
+    ]
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = []
+        exp_vals = []
+        for fly_id, data in paired_data[key].items():
+            if 'ctrl' in data and 'exp' in data:
+                ts_ctrl = time_stamps.get(fly_id, {}).get('ctrl')
+                ts_exp  = time_stamps.get(fly_id, {}).get('exp')
+                if ts_exp > ts_ctrl:
+                    linecolor = colors[0] #'blue'
+                else:
+                    linecolor=colors[0]
+                ctrl_vals.append(data['ctrl'])
+                exp_vals.append(data['exp'])
+                ax.plot([1, 2], [data['ctrl'], data['exp']], color=linecolor, linewidth=1, alpha=0.5)  # Line between pairs
+        x_ctrl = np.random.normal(1, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(2, noise, size=len(exp_vals))
+        stat, p_value = wilcoxon(ctrl_vals, exp_vals)
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1.5, max(max(ctrl_vals, default=0), max(exp_vals, default=0)) * 1.1, p_text,
+            ha='center', va='bottom', fontsize=10, color=markc)
+        # ax.hlines(np.mean(ctrl_vals), 0.9, 1.1, colors=markc, linewidth=2)
+        # ax.hlines(np.mean(exp_vals), 1.9, 2.1, colors=markc, linewidth=2)
+        ax.plot([1,2], [np.mean(ctrl_vals), np.mean(exp_vals)], color=colors[1], linewidth=3)
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.errorbar(1, np.mean(ctrl_vals), yerr=sem_ctrl, color=colors[1], capsize=0, linewidth=3)
+        ax.errorbar(2, np.mean(exp_vals), yerr=sem_exp, color=colors[1], capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['off', 'on'], ylabel=ylabel, xlim=xlim)
+
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+def jumping_comparisons_tracking(folder_path, savename, size=(3,5), groups=2, keywords = ['ctrl', 'ablated'], colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_white_plot(size=size, xaxis=False, ncols=groups)
+    paired_data = {metric: {} for metric in ['first_latency','return_lens','entry_angle_strength', 'crossovers']}
+    params_list = exp_parameters(folder_path)
+    time_stamps = {} 
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        d, d_in, d_out = inside_outside(exp_df)
+        if len(d_out) < 2:
+            continue
+        lengths = 0
+        crossovers = 0
+        for key, df in d_out.items():
+            lengths += df['seconds'].iloc[-1] - df['seconds'].iloc[0]
+        for key, df in d_in.items():
+            if df['ft_posx'].iloc[-1] - df['ft_posx'].iloc[0] > 40:
+                crossovers +=1
+        first_exit = d_out[list(d_out.keys())[0]]
+        first_latency = first_exit['seconds'].iloc[-1] - first_exit['seconds'].iloc[0]
+        return_length = lengths / len(d)
+        entry_angle, strength = compute_mean_entry_heading(d_out, imaging=False)
+      
+        # Extract Fly# using regex
+        match = re.search(r'Fly(\d+)', filename)
+        if not match:
+            continue
+        fly_id = int(match.group(1))
+        label  = 'ctrl' if keywords[0] in filename else 'exp'
+        t_match = re.search(r'(\d{8}-\d{6})', filename)
+        if t_match:
+            ts_str = t_match.group(1)
+            ts = datetime.datetime.strptime(ts_str, '%m%d%Y-%H%M%S')
+            time_stamps.setdefault(fly_id, {})[label] = ts
+        
+        for metric, value in (
+            ('first_latency', first_latency),
+            ('return_lens', return_length),
+            ('entry_angle_strength', strength),
+            #('crossovers', crossovers),
+        ):
+            paired_data[metric].setdefault(fly_id, {})[label] = value
+
+    datasets = [
+        (axs[0], 'return_lens', 'avg. return length (s)', (0.8, 2.2)),
+        (axs[1], 'first_latency', 'first return latency (s)', (0.8, 2.2)),
+        (axs[2], 'entry_angle_strength', 'entry angle strength', (0.8, 2.2)),
+        #(axs[3], 'crossovers', 'crossovers', (0.8, 2.2)),
+    ]
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = []
+        exp_vals = []
+        for fly_id, data in paired_data[key].items():
+            if 'ctrl' in data and 'exp' in data:
+                ts_ctrl = time_stamps.get(fly_id, {}).get('ctrl')
+                ts_exp  = time_stamps.get(fly_id, {}).get('exp')
+                if ts_exp > ts_ctrl:
+                    linecolor = colors[0] #'blue'
+                else:
+                    linecolor=colors[0]
+                ctrl_vals.append(data['ctrl'])
+                exp_vals.append(data['exp'])
+                ax.plot([1, 2], [data['ctrl'], data['exp']], color=linecolor, linewidth=1, alpha=0.5)  # Line between pairs
+        x_ctrl = np.random.normal(1, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(2, noise, size=len(exp_vals))
+        stat, p_value = wilcoxon(ctrl_vals, exp_vals)
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1.5, max(max(ctrl_vals, default=0), max(exp_vals, default=0)) * 1.1, p_text,
+            ha='center', va='bottom', fontsize=10, color=markc)
+        # ax.hlines(np.mean(ctrl_vals), 0.9, 1.1, colors=markc, linewidth=2)
+        # ax.hlines(np.mean(exp_vals), 1.9, 2.1, colors=markc, linewidth=2)
+        ax.plot([1,2], [np.mean(ctrl_vals), np.mean(exp_vals)], color=colors[1], linewidth=3)
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.errorbar(1, np.mean(ctrl_vals), yerr=sem_ctrl, color=colors[1], capsize=0, linewidth=3)
+        ax.errorbar(2, np.mean(exp_vals), yerr=sem_exp, color=colors[1], capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['off', 'on'], ylabel=ylabel, xlim=xlim)
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def jumping_entry_angles(folder_path, savename, size=(5, 5), colors=['#ff355e', 'lightgrey']):
+    fly_data = defaultdict(lambda: {'exp': [], 'ctrl': []})
+    params_list = exp_parameters(folder_path)
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment  
+        d, d_in, d_out = inside_outside(exp_df)
+        if len(d_out) < 2:
+            continue
+        # Extract fly ID and type from filename
+        fly_match = re.search(r'(Fly\d+)', filename)
+        type_match = 'exp' if 'exp' in filename else 'ctrl'
+        if not fly_match:
+            continue
+        fly_id = fly_match.group(1)
+        for key, df in d_out.items():
+            if df['seconds'].iloc[-1] - df['seconds'].iloc[0] >= 1:
+                df = get_last_second(df)
+                circ_angle = circmean_heading(df, [])
+                if circ_angle is not None:
+                    fly_data[fly_id][type_match].append(circ_angle)
+
+    # Create a polar plot for each fly that has both exp and ctrl data
+    for fly_id, angles in fly_data.items():
+        if angles['exp'] and angles['ctrl']:
+            fig, ax, markc = configure_white_polar(size=size, grid=False)
+            for angle in angles['exp']:
+                plt.polar([0, angle], [0, 1], color=colors[1], alpha=0.2, linewidth=1, solid_capstyle='round')
+            summary_vector_exp = np.mean(np.column_stack((np.cos(angles['exp']), np.sin(angles['exp']))), axis=0)
+            rho_exp, phi_exp = cart2pol(*summary_vector_exp)
+            plt.polar([0, phi_exp], [0, rho_exp], color=colors[1], linewidth=3, label='exp', solid_capstyle='round')
+            for angle in angles['ctrl']:
+                plt.polar([0, angle], [0, 1], color=colors[0], alpha=0.2, linewidth=1, solid_capstyle='round')
+            summary_vector_ctrl = np.mean(np.column_stack((np.cos(angles['ctrl']), np.sin(angles['ctrl']))), axis=0)
+            rho_ctrl, phi_ctrl = cart2pol(*summary_vector_ctrl)
+            plt.polar([0, phi_ctrl], [0, rho_ctrl], color=colors[0], linewidth=3, label='ctrl', solid_capstyle='round')
+            # plt.legend(loc='upper right', bbox_to_anchor=(1.1, 1.1))
+            plt.title(f'{fly_id} entry angles', fontsize=14)
+            fig_folder = os.path.join(folder_path, 'fig')
+            os.makedirs(fig_folder, exist_ok=True)
+            plt.show()
+            fig.savefig(os.path.join(fig_folder, f'{savename}_{fly_id}.pdf'), bbox_inches='tight')
+            plt.close(fig)
+
+
+def INC_plotter(folder_path, led, stripwidth=50, spacing=250, select_file=None, save=False):
+    params_list = exp_parameters(folder_path)
+    ledc = {
+        'none': 'grey',
+        'red': '#ff355e',
+        'green': '#0bda51'
+    }.get(led, 'grey')
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        if select_file and filename != select_file:
+            continue
+        fig, axs, markc = configure_white_plot(size=(10, 10), xaxis=True)
+        x_pos = exp_df['ft_posx'] - xo
+        min_x, max_x = x_pos.min(), x_pos.max()
+        base_left_edge = -(stripwidth/2)  # center plume starts 
+        first_start = base_left_edge + spacing * np.floor((min_x - base_left_edge) / spacing)
+        last_start = base_left_edge + spacing * np.ceil((max_x - base_left_edge) / spacing)
+        plume_starts = np.arange(first_start, last_start + 1, spacing)
+        y_pos = exp_df['ft_posy'] - yo
+        y_min = y_pos.min()
+        height = y_pos.max() - y_min
+        for start_x in plume_starts:
+            plume = patches.Rectangle(
+                (start_x, y_min),
+                stripwidth,
+                height,
+                facecolor='#fbceb1',
+                edgecolor='none', alpha=0.5
+            )
+            axs.add_patch(plume)
+        plt.scatter(0, 0, s=150, color='red')
+        plt.plot(x_pos, y_pos, color='grey', label='clean air', linewidth=1)
+        plt.plot(df_odor['ft_posx'] - xo, df_odor['ft_posy'] - yo, color='lightgrey', label='odor only', linewidth=1)
+        # if 'ctrl' not in filename:
+        #     plt.plot(df_light['ft_posx'] - xo, df_light['ft_posy'] - yo, color=ledc, label='light on', linewidth=1)
+        axs.set_aspect('equal', adjustable='datalim')
+        plt.title(filename, fontsize=14, color=markc)
+        plt.show()
+        out_dir = os.path.join(folder_path, 'traj')
+        os.makedirs(out_dir, exist_ok=True)
+        fig.savefig(os.path.join(out_dir, f'{filename}_odor_trajectory_white.pdf'), bbox_inches='tight')
+
+def xpos_dist(folder_path, savename, size):
+    fig, axs, markc = configure_white_plot(size=size, xaxis=True)
+    params_list = exp_parameters(folder_path)
+    xpos_all = []
+    xpos_ctrl_all = []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        d, d_in, d_out = inside_outside(exp_df)
+        xo = exp_df.iloc[0]['ft_posx']
+        xpos = np.abs(df['ft_posx'] - xo)
+
+        if 'acv' in filename:
+            xpos_ctrl_all.append(xpos)
+        else:
+            xpos_all.append(xpos)
+
+    xpos_all = pd.concat(xpos_all, axis=0, ignore_index=True)
+    xpos_ctrl_all = pd.concat(xpos_ctrl_all, axis=0, ignore_index=True)
+    sns.kdeplot(xpos_all, color='red', shade=False, cut=0, label='graded')
+    sns.kdeplot(xpos_ctrl_all, color='grey', shade=False, cut=0, label='sharp')
+    sigma = 25.0 / np.sqrt(2.0 * np.log(2.0))
+    xgrid = np.linspace(0, 500, 1000)
+    gauss = np.exp(-(xgrid**2) / (2.0 * sigma**2))  # peak = 1 at x=0
+    gauss_deriv = np.abs((-xgrid / (sigma**2)) * gauss)
+
+    axs.plot(xgrid, gauss * 0.3 * axs.get_ylim()[1], linestyle='--', color='black', label='odor conc.')
+    axs.plot(xgrid, gauss_deriv * 0.3 * axs.get_ylim()[1] / np.max(gauss_deriv), linestyle='--', color='blue', label='d/dx odor conc.')
+
+    plt.xticks([0, 25, 80, 200], color=markc, fontsize=12)
+    plt.yticks([0, 0.02], color=markc, fontsize=12)
+    plt.axvline(x=25, color='lightgrey')
+    plt.xlabel('x-position (mm)', color=markc, fontsize=14)
+    plt.ylabel('probability', color=markc, fontsize=14)
+    plt.xlim(0, 200)
+    plt.legend(frameon=False)
+    plt.show()
+    fig.savefig(os.path.join(figure_folder, f'{savename}.pdf'))
+
+def gaussian_vel_hist(folder_path, savename, size, bin_width):
+    fig, ax, markc = configure_white_plot(size=size, xaxis=True)
+    params_list = exp_parameters(folder_path)
+
+    xs, ys = [], []
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+
+        x0 = exp_df.iloc[0]['ft_posx']
+        xpos = np.abs(exp_df['ft_posx'].to_numpy() - x0)
+        yvel = exp_df['speed'].to_numpy()
+        conc = exp_df['mfc2_stpt'] / (exp_df['mfc2_stpt'] + exp_df['mfc1_stpt'])
+
+        # yvel = np.abs(exp_df['x-vel'].to_numpy())
+
+        mask = np.isfinite(xpos) & np.isfinite(yvel)
+        xs.append(xpos[mask])
+        ys.append(yvel[mask])
+
+    xpos = np.concatenate(xs)
+    yvel = np.concatenate(ys)
+
+    x_min, x_max = xpos.min(), xpos.max()
+    bins = np.arange(x_min, x_max + bin_width, bin_width)
+    bin_indices = np.digitize(xpos, bins)
+
+    bin_centers = []
+    mean_y = []
+    sem_y = []  
+
+    for i in range(1, len(bins)):
+        sel = (bin_indices == i)
+        if np.any(sel):
+            bin_centers.append(0.5*(bins[i-1] + bins[i]))
+            mean_y.append(np.mean(yvel[sel]))
+            sem_y.append(np.std(yvel[sel]) / np.sqrt(sel.sum()))
+
+    bin_centers = np.array(bin_centers)
+    mean_y = np.array(mean_y)
+    sem_y = np.array(sem_y)
+
+    ax.errorbar(bin_centers, mean_y, yerr=sem_y, fmt='-o', capsize=1)
+    ax.set_xlabel("x position (mm)", fontsize=14)
+    ax.set_ylabel("avg. speed (mm/s)",fontsize=14)
+    ax.set_xticks([0, 25, 80])
+    ax.tick_params(axis='x', labelsize=12, colors=markc)
+    ax.tick_params(axis='y', labelsize=12, colors=markc)
+    ax.axvline(x=25, color='lightgrey')
+    sigma = 25.0 / np.sqrt(2.0 * np.log(2.0))
+    xgrid = np.linspace(0, 500, 1000)
+    gauss = np.exp(-(xgrid**2) / (2.0 * sigma**2))  # peak = 1 at x=0
+    if 'ctrl' not in folder_path:
+        ax.plot(xgrid, gauss * 0.2 * ax.get_ylim()[1], linestyle='--', color='black', label='odor conc.')
+    ax.set_xlim(0, 80)
+    plt.tight_layout()
+    plt.show()
+    out_path = os.path.join(folder_path, f'{savename}.pdf')
+    fig.savefig(out_path, dpi=300)
+
+
+def ET_comparisons(folder_path, savename, size=(3,5), groups=2, colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_white_plot(size=size, xaxis=False, ncols=groups)
+
+    params_list = exp_parameters(folder_path)
+
+    # Prepare to store all-fly data for summary stats
+    all_inside = {metric: [] for metric in ['plume_dists', 'orthog_dists', 'speeds', 'plume_speeds', 'orthog_speeds']}
+    all_outside = {metric: [] for metric in ['plume_dists', 'orthog_dists', 'speeds', 'plume_speeds', 'orthog_speeds']}
+
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, exp_df, xo, yo, plume_color = this_experiment
+        d, d_in, d_out = light_on_off(exp_df)
+        print(list(d_in.keys()))
+        inside_data = {metric: [] for metric in all_inside}
+        outside_data = {metric: [] for metric in all_outside}
+
+        for key, df in d.items():
+            ydisp = df['ft_posy'].iloc[-1] - df['ft_posy'].iloc[0]
+            xdisp = np.abs(df['ft_posx'].iloc[-1] - df['ft_posx'].iloc[0])
+            speed = np.mean(df['speed'])
+            yvel = np.mean(df['y-vel'])
+            xvel = np.mean(df['x-vel'])
+
+            if key % 2 > 0:
+                inside_data['plume_dists'].append(ydisp)
+                inside_data['orthog_dists'].append(xdisp)
+                inside_data['speeds'].append(speed)
+                inside_data['plume_speeds'].append(yvel)
+                inside_data['orthog_speeds'].append(xvel)
+            else:
+                outside_data['plume_dists'].append(ydisp)
+                outside_data['orthog_dists'].append(xdisp)
+                outside_data['speeds'].append(speed)
+                outside_data['plume_speeds'].append(yvel)
+                outside_data['orthog_speeds'].append(xvel)
+
+        # Average per fly
+        inside_avg = {metric: np.mean(values) if values else np.nan for metric, values in inside_data.items()}
+        outside_avg = {metric: np.mean(values) if values else np.nan for metric, values in outside_data.items()}
+
+        # Store for group-level stats
+        for metric in all_inside:
+            all_inside[metric].append(inside_avg[metric])
+            all_outside[metric].append(outside_avg[metric])
+
+        # Plot per-fly paired data
+        datasets = [
+            (axs[0], 'plume_dists', 'plume distance (mm)', (0.8, 2.2)),
+            (axs[1], 'orthog_dists', 'orthogonal distance (mm)', (0.8, 2.2)),
+            (axs[2], 'speeds', 'speed (mm/s)', (0.8, 2.2)),
+            (axs[3], 'plume_speeds', 'plume speed (mm/s)', (0.8, 2.2)),
+            (axs[4], 'orthog_speeds', 'orthogonal speed (mm/s)',(0.8, 2.2))
+        ]
+
+        for ax, metric, ylabel, xlim in datasets:
+            ax.plot([1, 2], [outside_avg[metric], inside_avg[metric]], 
+                    color=markc, linewidth=1)
+
+    # Plot group-level mean ± SEM
+    for ax, metric, ylabel, xlim in datasets:
+        in_vals = np.array(all_inside[metric])
+        out_vals = np.array(all_outside[metric])
+        # Remove NaNs
+        in_vals = in_vals[~np.isnan(in_vals)]
+        out_vals = out_vals[~np.isnan(out_vals)]
+
+        mean_in = np.nanmean(in_vals)
+        mean_out = np.nanmean(out_vals)
+        sem_in = sem(in_vals, nan_policy='omit')
+        sem_out = sem(out_vals, nan_policy='omit')
+        ax.errorbar(1, mean_out, yerr=sem_out, color=colors[0], capsize=0, linewidth=3)
+        ax.errorbar(2, mean_in, yerr=sem_in, color=colors[1], capsize=0, linewidth=3)
+        ax.hlines(mean_out, 0.9, 1.1, colors=colors[0], linewidth=3)
+        ax.hlines(mean_in, 1.9, 2.1, colors=colors[1], linewidth=3)
+        y_all = np.concatenate([in_vals, out_vals])
+        y_min, y_max = np.min(y_all), np.max(y_all)
+        margin = 0.1 * (y_max - y_min) if y_max != y_min else 1
+        ylim = (y_min - margin, y_max + margin)
+        ax.set_ylim(ylim)
+        ax.set_ylabel(ylabel, fontsize=14)
+        ax.set_xlim(xlim)
+        ax.set_xticks([1, 2])
+        ax.set_xticklabels(['out', 'in'])
+        if len(in_vals) > 0 and len(out_vals) > 0:
+            stat, p = wilcoxon(out_vals, in_vals, alternative='two-sided')
+            stars = ''
+            if p < 0.001:
+                stars = '***'
+            elif p < 0.01:
+                stars = '**'
+            elif p < 0.05:
+                stars = '*'
+            else:
+                stars = 'ns'
+            max_y = max(np.max(in_vals), np.max(out_vals))
+            y_text = max_y + 0.05 * (ylim[1] - ylim[0])
+            ax.text(1.5, y_text, f'{stars} (p={p:.3f})', ha='center', va='bottom', fontsize=9)
+    
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def orco_acv_comparisons(folder_path, savename, size=(3,5), colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_white_plot(size=size, xaxis=False)
+    params_list = exp_parameters(folder_path)
+    acv_inside = []
+    orco_inside = []
+
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        print(filename)
+        if 'strip' in filename:
+            d, d_in, d_out = light_on_off(exp_df)
+        else:
+            d, d_in, d_out = inside_outside_odor(exp_df)
+        
+        durations = []
+        for key, df in d_in.items():
+            duration = get_a_bout_calc(df, 'duration')
+            if 'strip' in filename:
+                durations.append(duration)
+            else:
+                durations.append(duration)
+
+        avg_duration = sum(durations) / len(durations)
+        if 'strip' in filename:
+            orco_inside.append(avg_duration)
+        else:
+            acv_inside.append(avg_duration)
+
+    noise = 0.05
+    x_acv = np.random.normal(1, noise, size=len(acv_inside))
+    x_orco = np.random.normal(2, noise, size=len(orco_inside))
+    t_stat, p_value = stats.ttest_ind(acv_inside, orco_inside, equal_var=False)
+    p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+    axs.text(1.5, max(max(acv_inside, default=0), max(orco_inside, default=0)) * 1.1, p_text,
+        ha='center', va='bottom', fontsize=10, color=markc)
+    mean_acv = np.nanmean(acv_inside)
+    mean_orco = np.nanmean(orco_inside)
+    sem_acv = sem(acv_inside, nan_policy='omit')
+    sem_orco = sem(orco_inside, nan_policy='omit')
+    axs.errorbar(1, mean_acv, yerr=sem_acv, color=markc, capsize=0, linewidth=3)
+    axs.errorbar(2, mean_orco, yerr=sem_orco, color=markc, capsize=0, linewidth=3)
+    axs.hlines(mean_acv, 0.9, 1.1, colors=markc, linewidth=3)
+    axs.hlines(mean_orco, 1.9, 2.1, colors=markc, linewidth=3)
+    plt.scatter(x_acv, acv_inside, color=colors[0])
+    plt.scatter(x_orco, orco_inside, color=colors[1])
+    axs.tick_params(axis='x', which='both', length=0)
+    axs.spines['bottom'].set_visible(False)
+    axs.set_xticks([1, 2])
+    style_ax(axs, markc, title=None, xtick_labels=['acv', 'light strip'], ylabel='avg. time inside (s)', xlim=(0.7,2.3))
+    sns.despine(offset=10)
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+
+
+def gaussian_comparisons(folder_path, savename, size=(3,5), groups=4, side ='inside', impose_edge=True, keywords = ['ctrl', 'ablated'], colors=['#c1ffc1', 'red']):
+    fig, axs, markc = configure_white_plot(size=size, xaxis=False, ncols=groups)
+    paired_data = {metric: {} for metric in ['speed', 'uw_dist', 'pl', 'time']}
+    params_list = exp_parameters(folder_path)
+    time_stamps = {} 
+    for this_experiment in params_list:
+        figure_folder, filename, df, df_odor, df_light, bl_df, exp_df, xo, yo, plume_color = this_experiment
+        d, d_in, d_out = inside_outside(exp_df)
+        _, d_in25, d_out25 = inside_outside_xpos(exp_df, 25)
+        if impose_edge and side == 'inside':
+            bout_dict = d_in25
+        elif impose_edge and side == 'outside':
+            bout_dict = d_out25
+        elif not impose_edge and side == 'inside': 
+            bout_dict = d_in
+        elif not impose_edge and side == 'outside': 
+            bout_dict = d_out
+         
+        match = re.search(r'Fly(\d+)', filename)
+        if not match:
+            continue
+        fly_id = int(match.group(1))
+        label  = 'sharp' if 'acv' in filename else 'graded'
+        t_match = re.search(r'(\d{8}-\d{6})', filename)
+        
+        if not bout_dict:  
+            metrics = {'speed': 0.0, 'uw_dist': 0.0, 'pl': 0.0, 'time': 0.0}
+        else:
+            speed_vals, uw_dists, pl_vals, time_vals = [], [], [], []
+        for key, bout_df in bout_dict.items():
+            speed_vals.append(float(bout_df['speed'].mean()))
+            uw_dists.append(float(bout_df['ft_posx'].iloc[-1] - bout_df['ft_posx'].iloc[0]))
+            pl_vals.append(float(get_a_bout_calc(bout_df, 'path_length')/1000))
+            time_vals.append(float(get_a_bout_calc(bout_df, 'duration')))
+        
+            metrics = {
+                'speed': float(np.mean(speed_vals)),
+                'uw_dist': float(np.mean(uw_dists)),
+                'pl': float(np.mean(pl_vals)),
+                'time': float(np.mean(time_vals)),
+            }
+
+        # Assign metrics to this fly/label
+        for metric, value in metrics.items():
+            paired_data[metric].setdefault(fly_id, {})[label] = value
+        datasets = [
+            (axs[0], 'speed', f'{side} speed (mm/s)', (0.8, 2.2)),
+            (axs[1], 'uw_dist', f'{side} upwind distance (mm)', (0.8, 2.2)),
+            (axs[2], 'pl', f'{side} pathlength (m)', (0.8, 2.2)),
+            (axs[3], 'time', f'{side} time (s)', (0.8, 2.2)),
+        ]
+    noise = 0.05
+    for ax, key, ylabel, xlim in datasets:
+        ctrl_vals = []
+        exp_vals = []
+        for fly_id, data in paired_data[key].items():
+            if 'sharp' in data and 'graded' in data:
+                ctrl_vals.append(data['sharp'])
+                exp_vals.append(data['graded'])
+                ax.plot([1, 2], [data['sharp'], data['graded']], color=markc, linewidth=1, alpha=0.5)  # Line between pairs
+        x_ctrl = np.random.normal(1, noise, size=len(ctrl_vals))
+        x_exp = np.random.normal(2, noise, size=len(exp_vals))
+        stat, p_value = wilcoxon(ctrl_vals, exp_vals)
+        p_text = f'p = {p_value:.3f}' if p_value >= 0.001 else 'p < 0.001'
+        ax.text(1.5, max(max(ctrl_vals, default=0), max(exp_vals, default=0)) * 1.1, p_text,
+            ha='center', va='bottom', fontsize=10, color=markc)
+        # ax.hlines(np.mean(ctrl_vals), 0.9, 1.1, colors=markc, linewidth=2)
+        # ax.hlines(np.mean(exp_vals), 1.9, 2.1, colors=markc, linewidth=2)
+        ax.plot([1,2], [np.mean(ctrl_vals), np.mean(exp_vals)], color=colors[1], linewidth=3)
+        sem_ctrl = sem(ctrl_vals) if len(ctrl_vals) > 1 else 0
+        sem_exp = sem(exp_vals) if len(exp_vals) > 1 else 0
+        ax.errorbar(1, np.mean(ctrl_vals), yerr=sem_ctrl, color=colors[1], capsize=0, linewidth=3)
+        ax.errorbar(2, np.mean(exp_vals), yerr=sem_exp, color=colors[1], capsize=0, linewidth=3)
+        style_ax(ax, markc, None, xtick_labels=['sharp', 'graded'], ylabel=ylabel, xlim=xlim)
+
+    sns.despine(offset=10)
+    fig.tight_layout()
+    plt.show()
+    if not os.path.exists(f'{folder_path}/fig/'):
+        os.makedirs(f'{folder_path}/fig/')
+    fig.savefig(f'{folder_path}/fig/{savename}.pdf', bbox_inches='tight')
+   
+
+
+def _centers_to_edges(centers: np.ndarray) -> np.ndarray:
+    if len(centers) < 2:
+        step = 1.0
+    else:
+        step = float(np.diff(centers).mean())
+    return np.concatenate(([centers[0] - step/2], centers + step/2))
+
+def _hist2d_from_df(df, xcol, ycol, x_centers, y_centers, x0=0.0, y0=0.0):
+    """2D histogram using bin centers; returns array shaped (len(y), len(x)) for imshow."""
+    x = np.abs(df[xcol].to_numpy() - x0)
+    y = df[ycol].to_numpy() - y0
+    m = np.isfinite(x) & np.isfinite(y)
+    x, y = x[m], y[m]
+    xe = _centers_to_edges(x_centers)
+    ye = _centers_to_edges(y_centers)
+    H, _, _ = np.histogram2d(x, y, bins=[xe, ye])
+    return H.T  # rows=y, cols=x for imshow
+
+def occupancy_heatmap_all_files(
+    folder_path,
+    xlim, ylim,                 # e.g., (-200, 200), (0, 1000)
+    res=5.0,                    # bin size in your position units (mm)
+    xcol="ft_posx",
+    ycol="ft_posy",
+    include=("exp_df","df_odor"),  # which tables to include per experiment
+    normalize=True,             # True -> probability map; False -> raw counts
+    percentile_range=(0, 95),   # for color scaling on nonzero bins
+    cmap="Greys",
+    figure_size=(8,10),
+    save_to=None                # path to save (e.g., ".../all_files_occupancy.pdf"); None -> just show
+):
+    """
+    Build a SINGLE occupancy heatmap by summing over all files/experiments in folder_path.
+    Uses exp_parameters(folder_path) to get per-file DataFrames + (xo, yo) offsets.
+    """
+    params_list = exp_parameters(folder_path)
+
+    # shared grid for everyone (guarantees comparability)
+    x_centers = np.arange(xlim[0], xlim[1] + res, res, dtype=float)
+    y_centers = np.arange(ylim[0], ylim[1] + res, res, dtype=float)
+
+    # accumulator
+    H_all = np.zeros((len(y_centers), len(x_centers)), dtype=float)
+
+    # sum occupancy from requested phases across all files
+    for this_experiment in params_list:
+        (
+            figure_folder, filename, df, df_odor, df_light,
+            bl_df, exp_df, xo, yo, plume_color
+        ) = this_experiment
+
+        # pick which per-file DataFrames to include
+        name_to_df = {
+            "df": df,
+            "df_odor": df_odor,
+            "df_light": df_light,
+            "bl_df": bl_df,
+            "exp_df": exp_df,
+        }
+        for key in include:
+            dfi = name_to_df.get(key, None)
+            if dfi is not None and len(dfi):
+                # dfi = dfi.copy()
+                # dfi[xcol] = dfi[xcol] - xo
+                # dfi[ycol] = dfi[ycol] - yo
+                # dfi[xcol] = np.abs(dfi[xcol])
+                H_all += _hist2d_from_df(dfi, xcol, ycol, x_centers, y_centers, x0=xo, y0=yo)
+
+    # normalize if desired
+    if normalize and H_all.sum() > 0:
+        H_plot = H_all / H_all.sum()
+    else:
+        H_plot = H_all
+
+    # robust color scaling on nonzero entries
+    nz = H_plot[H_plot > 0]
+    if nz.size:
+        vmin = np.percentile(nz, percentile_range[0])
+        vmax = np.percentile(nz, percentile_range[1])
+        if vmax <= vmin:
+            vmin, vmax = nz.min(), nz.max()
+    else:
+        vmin, vmax = 0.0, 1.0
+
+    # --- figure ---
+    fig, ax = plt.subplots(figsize=figure_size)
+    extent = (x_centers.min(), x_centers.max(), y_centers.min(), y_centers.max())
+    im = ax.imshow(
+        H_plot,
+        cmap=cmap,
+        origin="lower",
+        extent=extent,
+        vmin=vmin, vmax=vmax,
+        aspect="auto",
+        rasterized=True
+    )
+    ax.set_xlim(xlim); ax.set_ylim(ylim)
+    ax.set_xlabel("x-position (mm)")
+    ax.set_ylabel("y-position (mm)")
+    cb = fig.colorbar(im, ax=ax, shrink=0.9, pad=0.02)
+    cb.set_label("occupancy" + (" (prob.)" if normalize else ""))
+
+    sns.despine()
+    fig.tight_layout()
+    plt.show()
+    os.makedirs(os.path.dirname(save_to), exist_ok=True)
+    fig.savefig(save_to, bbox_inches="tight")
+    plt.close(fig)
+    print(f"✓ saved {save_to}")
+    
+
+    return H_all, (x_centers, y_centers)
