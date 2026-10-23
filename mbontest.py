@@ -1,4 +1,5 @@
 
+#%%
 from imaging_analysis import *
 from behavior_analysis import *
 from analysis_funs.regression import fci_regmodel
@@ -13,12 +14,49 @@ from scipy import signal as sg
 import sys
 import pickle
 
+folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/PAM_MBON21/picklez/rb/oct_mch_PAM_pulses/ctrl'
+neuron = 'mbon21'
+for filename in os.listdir(folder):
+    if filename.endswith('.pkl'):
+        img_dict = open_pickle(f'{folder}/{filename}')
+        pv2, ft2 = process_pickle_old(img_dict, neuron)
+        fig, axs = plt.subplots(1, 1, figsize=(15, 5))
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.sans-serif'] = 'Arial'   
+        FF = pv2[f'0_{neuron}'].to_numpy()
+        time = pv2['relative_time'].to_numpy()
+        odor2_on = ft2['mfc3_stpt'].to_numpy()
+        odor1_on = ft2['mfc2_stpt'].to_numpy()
+        n = min(len(time), len(FF), len(odor1_on), len(odor2_on))
+        time = time[:n]
+        FF = FF[:n]
+        odor1_on = odor1_on[:n]
+        odor2_on = odor2_on[:n]
+        axs.plot(time, FF, color='k', linewidth=.75)
+        if 'mch' in filename:
+            shade_on_intervals(axs, time, odor1_on, alpha=0.3, color='#d473d4')
+        else:
+            shade_on_intervals(axs, time, odor1_on, alpha=0.3, color='#fbceb1')
+        shade_on_intervals(axs, time, odor2_on, alpha=0.3, color='#7ed4e6')
+        # axs.plot(time, odor2_on, color='blue', linewidth=.75)
+        # axs.plot(time, odor1_on, color='red', linewidth=.75)
+        plt.title(filename, size=16)
+        plt.ylabel(r'$\Delta$F/F', size=16)
+        plt.xlabel('time (s)', size=16)
+        plt.show()
+
+#%%
+figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/PAM_MBON21/picklez'
+neuron = 'mbon21'
+color = 'white'
+# triggered_zFF_PAM(figure_folder,neuron,color,tbef=5,taf=15,event_type='entry',first=False,zscore_mode='raw')
+# triggered_upwind_speed(figure_folder,neuron,color,tbef=2,taf=5,event_type='entry',first=False,norm_mode='none')
 
 # figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/mbon21/picklez/strip_grid_bump_jump'
 # neuron = 'mbon21'
 #rebaseline(figure_folder, neuron, span=500)
 # peak_FF_heading_vs_entry_angle(figure_folder, neuron)
-# trace_FF_bw(figure_folder, neuron, window=None)
+trace_FF_bw(figure_folder, neuron, window=None)
 # trace_FF_bw_bouts(figure_folder, neuron, pre_post_time=2, separation=2, thresh=10, oct=False)
 # dF_entries_bw(figure_folder, neuron, thresh=20, sign='pos')
 # dF_entries_time_bw(figure_folder, neuron, thresh=20, sign='pos')
@@ -38,15 +76,32 @@ import pickle
 # triggered_zFF_first_two(figure_folder, neuron, tbef=5, taf=5, event_type='exit', plotc='black', oct=False)
 # triggered_zFF_first_two(figure_folder, neuron, tbef=5, taf=5, event_type='entry', plotc='black', oct=False)
 
-figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/mbon21/picklez/strip_grid_bump_jump/rb'
-neuron = 'mbon21'
-traj_jump_summary(figure_folder, neuron, n_interp=100, time_threshold=60, colormap='coolwarm', darkmode=True)
+# figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/mbon21/picklez/strip_grid_bump_jump/rb'
+# neuron = 'mbon21'
+# traj_jump_summary(figure_folder, neuron, n_interp=100, time_threshold=60, colormap='coolwarm', darkmode=True)
 
 
 #%%
+from imaging_analysis import *
+from behavior_analysis import *
+from analysis_funs.regression import fci_regmodel
+from analysis_funs.optogenetics import opto
+from analysis_funs.CX_imaging import CX
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from src.utilities import imaging as im
+from skimage import io, data, registration, filters, measure
+from scipy import signal as sg
+import sys
+import pickle
+figure_folder = '/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/PAM_MBON21/picklez/rb'
+neuron = 'mbon21'
+color = 'white'
+
 
 # Trajectory w/ fluorescence colormap
-# traj_FF(figure_folder, neuron)
+traj_FF(figure_folder, neuron)
 # FF_tuning(figure_folder, neuron)
 # FF_time_corr(figure_folder, neuron)
 #FF_xpos_corr(figure_folder, neuron)
@@ -112,3 +167,4 @@ traj_jump_summary(figure_folder, neuron, n_interp=100, time_threshold=60, colorm
 # plt.title('Model trained on pre air period')
 # plt.savefig(os.path.join(savedir, 'summary_R2_train_vs_test.png'))
 # plt.show()
+# %%

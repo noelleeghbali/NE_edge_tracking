@@ -1,21 +1,25 @@
 # %%
 from imaging_analysis import *
-from behavior_analysis import *
-from analysis_funs.regression import *
-from analysis_funs.optogenetics import opto
-from analysis_funs.CX_imaging import CX
-import os
+from analysis_funs.regression import fci_regmodel
 import numpy as np
-import matplotlib.pyplot as plt
-from src.utilities import imaging as im
+import pandas as pd
+import analysis_funs.utilities.funcs as fc
+from analysis_funs.optogenetics import opto 
+import os
+import matplotlib.pyplot as plt 
+from analysis_funs.utilities import imaging as im
 from skimage import io, data, registration, filters, measure
 from scipy import signal as sg
-import statsmodels.api as sm
-import sys
+from scipy import stats
+from analysis_funs.CX_imaging import CX
+from analysis_funs.CX_analysis_col import CX_a
+from analysis_funs.utilities import funcs as fn
+from Utilities.utils_general import utils_general as ug
+plt.rcParams['pdf.fonttype'] = 42 
 import pickle
 
-datadir = os.path.join('/Volumes/LaCie/noelle_imaging/MBON21')
-savedir = os.path.join('/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/MBON21/picklez')
+datadir = os.path.join('/Volumes/LaCie/noelle_imaging/PAM_CsChr_MBON21_GC7f/260306/F2/T1')
+savedir = os.path.join('/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/PAM_MBON21/picklez')
 d = datadir.split(os.path.sep)
 name = d[-3] + '_' + d[-2] + '_' + d[-1]
 savename = f'{name}.pkl'
@@ -25,7 +29,7 @@ ex = im.fly(name, datadir)
 ex.register_all_images(overwrite=True)
 ex.z_projection()
 # %% Masks for ROI drawing
-ex.mask_slice = {'All': [1, 2, 3, 4]}
+ex.mask_slice = {'All': [1, 2, 3]}
 ex.t_projection_mask_slice()
 # %%
 cx = CX(name, ['mbon21'], datadir)

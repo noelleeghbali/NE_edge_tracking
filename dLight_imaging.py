@@ -13,7 +13,7 @@ from scipy import signal as sg
 import sys
 import pickle
 
-datadir = os.path.join('/Volumes/LaCie/noelle_imaging/KC_dLight/251024/F2/T1')
+datadir = os.path.join('/Volumes/LaCie/noelle_imaging/KC_dLight/260213/F1/T1')
 savedir = os.path.join('/Users/noelleeghbali/Desktop/exp/imaging/noelle_imaging/KC_dLight/picklez')
 d = datadir.split(os.path.sep)
 name = d[-3] + '_' + d[-2] + '_' + d[-1]
@@ -26,6 +26,18 @@ ex.z_projection()
 # %% Masks for ROI drawing
 ex.mask_slice = {'All': [1]}
 ex.t_projection_mask_slice()
+#%%
+regions = ['g2','g3','g4','g5'] #,'b1','b2']
+cx = CX(name, regions, datadir)
+# save preprocessing, consolidates behavioural data
+cx.save_preprocessing()
+# Process ROIs and saves csv
+cx.process_rois(single=True)
+# Post processing, saves data as h5
+cx.crop = False
+cx.save_postprocessing()
+
+#%%
 
 #%% get behavioral data 
 
@@ -79,6 +91,9 @@ rebaseline(savedir, 'mbon09', span=500)
 # pv2, ft2 = process_pickle(img_dict, 'mbon09')
 # ft2_csv = os.path.join(savedir, f'{savename}_ft2.csv')
 # ft2.to_csv(ft2_csv, index=False)
+
+
+
 # %%
 fc = fci_regmodel(pv2[['0_mbon09']].to_numpy().flatten(), ft2, pv2)
 #fc.rebaseline(span=400, plotfig=True)
@@ -107,6 +122,9 @@ plt.subplots_adjust(bottom=0.4)
 plt.ylabel('Coefficient weight')
 plt.xlabel('Regressor name')
 plt.show()
+
+
+
 # %% Summarise all
 savedir = "Y:\Data\FCI\Hedwig\\SS70711_FB4X\\SummaryFigures"
 datadirs = ["Y:\Data\FCI\Hedwig\\SS70711_FB4X\\240307\\f1\\Trial3",

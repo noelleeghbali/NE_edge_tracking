@@ -3,7 +3,7 @@ from behavior_analysis import *
 
 
 #%% Plot a trajectory
-folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/ML/MB010B_DopR1'
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/ML/MB010B_GFP'
 # save_exp_logs(folder_path)
 
 trajectory_plotter_bw(folder_path, 50, 1000, 0, [-500, 500], [0,1000], led='none', hlines=None, select_file=None, plot_type='odor', save=True)
@@ -406,4 +406,10 @@ paired_plotter(folder_path, led='green', strip_width=50, strip_length=1100, plum
 # %% FB4R oct 45
 folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/MAIN/FB4R_GtACR_oct_45'
 trajectory_plotter_45_bw(folder_path, led='green',  select_file=None, save=True)
+
+# %% RNAi
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/ML/MB010B_RNAi'
+
+unpaired_bl_comparisons(folder_path,'RNAi bl comps',size=(10,3),groups=5,labels=['DopR1','GFP'],colors=('blue', 'grey'))
+
 # %%
