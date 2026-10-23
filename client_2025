@@ -3,32 +3,38 @@ from behavior_analysis import *
 
 
 #%% Plot a trajectory
-folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2024_exp/analysis/constant_plume_AS'
-trajectory_plotter_bw(folder_path, 30, 1500, 0, [-500, 500], [0,1500], led='red', hlines=None, select_file=None, plot_type='odor', save=True)
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/ML/MB010B_DopR1'
+# save_exp_logs(folder_path)
+
+trajectory_plotter_bw(folder_path, 50, 1000, 0, [-500, 500], [0,1000], led='none', hlines=None, select_file=None, plot_type='odor', save=True)
+# trajectory_plotter_45_bw(folder_path, led='green',  select_file=None, save=True)
 # tracking_over_time(folder_path, 'acv tracking progression', size=(6,6), colors=['white', '#fbceb1'])
 
 # %% PAM>Chr FAC analyses
-folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2024_exp/ANALYSIS/PAM_Chr_oct'
+folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2024_exp/ANALYSIS/PAM_Chr_oct'
+folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2026_exp/ANALYSIS/PAM_Chr_fig2a'
 # pulse_entry_angle(folder_path, 'single vs multi entry angles', size=(5,5), colors=['grey', '#ff355e'])
 # alt_pulse_return_efficiency(folder_path, 'single vs multi return efficiency', size=(5, 5), groups=2, colors=['white','red'])
 # pulse_entry_angle_strength(folder_path, 'entry angle strength', size=(3,4), colors=['white', 'red'])
-pulse_cw_dist(folder_path, 'cw dist w stats', size=(4, 4), plotc='black', groups=3)
-pulse_uw_tracking(folder_path, 'uw dist w stats', size=(4,4), plotc='black', groups=3)
-# pulse_cw_vs_uw_dist(folder_path, 'uw vs cw', size=(9,4), plotc='black')
+# pulse_cw_dist(folder_path, 'cw dist w stats', size=(4, 4), plotc='black', groups=3)
+pulse_uw_tracking(folder_path2, 'uw dist tracked single', size=(4,3), plotc='black', groups=3, colors=['#7ed4e6', '#ff355e', '#ff355e']) # edited to groups: no odor, no led, led+odor
+pulse_rpm(folder_path2, 'uw returns per meter single', size=(4,3), plotc='black', groups=3, colors=['#7ed4e6', '#ff355e', '#ff355e']) 
 
-#%% acv vs. oct comparisons (tentative FIG 2)
+#%% acv vs. oct comparisons (tentative FIG 2 supplement)
 folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/ANALYSIS/PAMoct_CSacv'
 folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/ANALYSIS/PAM_num_reinforcements'
+folder_path3 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2024_exp/analysis/constant_plume_AS'
 
 # trajectory_plotter_bw(folder_path2, 50, 1000, 0, [-500, 500], [0,1000], led='red', hlines=[500], select_file= None, plot_type='odor', save=True)
-# oct_acv_comparisons(folder_path1, 'inside ET comparisons', size=(9,4), side='inside', colors=['#fbceb1', '#7ed4e6'])
-# oct_pulse_comparisons(folder_path2, 'reinforcement num comparisons et', size=(9.3,4), colors=['#fbceb1', '#ff355e'])
+ET_comparisons(folder_path2, 'oct et comps', size=(10,3), groups=6, colors=['#6acff6', 'red'])
+ET_comparisons(folder_path3, 'acv et comps', size=(10,3), groups=6, colors=['#6acff6', 'red'])
+
+# oct_acv_comparisons(folder_path1, 'outside ET comparisons', size=(9,4), side='outside', colors=['#fbceb1', '#7ed4e6'])
+# oct_pulse_comparisons(folder_path2, 'reinforcement num comparisons et', size=(8,3), colors=['#fbceb1', '#ff355e'])
 # oct_led_comparisons(folder_path2, 'led multi paired on off comparisons - outlier', size=(12,5), colors=['grey', '#ff355e'])
 # oct_time_comparisons(folder_path2, 'reinforcement dur. vs et', size=(15,3), colors=['#f56fa1', '#b0e0e6', '#03c03c', '#836fff', '#ed9121'])
 # oct_dist_comparisons(folder_path2, 'reinforcement dist. vs et', size=(15,3), colors=['#f56fa1', '#b0e0e6', '#03c03c', '#836fff', '#ed9121'])
-
-
-oct_led_re_scatter(folder_path2, 'multi re vs dist scatter', size=(5,5), colors=['lightgrey', '#ff355e'])
+# oct_led_re_scatter(folder_path2, 'multi re vs dist scatter', size=(5,5), colors=['lightgrey', '#ff355e'])
 
 # %% Plot a trajectory
 # jumping_plotter_bw(folder_path, led='none', jumpthresh=None, stripwidth=50,select_file=None)
@@ -38,14 +44,19 @@ oct_led_re_scatter(folder_path2, 'multi re vs dist scatter', size=(5,5), colors=
 # %% PAM>Chr Crisscross experiments
 folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2025_exp/MAIN/light_cc_oct'
 folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2025_exp/ANALYSIS/light_cc_oct_all'
+folder_path3 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2026_exp/ANALYSIS/PAM_Chr_fig2b'
 
 # trajectory_plotter_bw(folder_path2, 50, 100000, -100, [-500, 500], [0,1000], led='red', hlines=[500], select_file= None, plot_type='odor', save=True)
-# block_xpos_distribution(folder_path1, 'b2 cc xpos dist', size=(6,5), cutoff=500, labels = ['LED inside', 'LED outside'], colors=['lightgrey', '#ff355e'])
+# block_xpos_distribution(folder_path2, 'b1 vs b2 xpos dist', size=(4,3), labels = ['LED inside', 'LED outside'], colors=['lightgrey', '#ff355e'])
+cc_xpos_distribution(folder_path3, 'cc vs ctrl b2 xpos dist', size=(3,3), labels = ['ctrl', 'cc'], colors=['#7ed4e6', '#ff355e'])
+# cc_uws(folder_path3, 'cc vs ctrl uws raw', size=(4.5,3), sample_rate=30, tbef=2, taf=2, labels=['ctrl', 'cc'], colors=['#7ed4e6', '#ff355e'],baseline_subtract=True)
+# PAM_returns(folder_path3, 'PAM pulse return visualizer', size=(5,4), colors=['#7ed4e6', '#ff355e'])
 # block_return_efficiency(folder_path2, 'b1 vs b2 return eff', size=(3,5), cutoff=500, labels = ['LED inside', 'LED outside'], colors=['lightgrey', '#ff355e'])
 # b2_baseline_comp(folder_path2, 'b2 vs baseline tort', size=(4,3), cutoff=500, labels=['baseline', 'first 2 min.', 'last 2 min.'], colors=['grey', '#ff355e', '#ff355e'])
-b2_baseline_traj(folder_path2, 'b2 vs baseline traj', size=(8,4), cutoff=500, labels = ['baseline', 'unpaired reinforcement'], colors=['grey', '#ff355e'], palette='husl')
-b2_baseline_traj_individual(folder_path2, 'b2 vs baseline traj indiv', size=(8,4), cutoff=500, labels = ['baseline', 'unpaired reinforcement'], colors=['grey', '#ff355e'])
-
+# b2_baseline_traj(folder_path2, 'b2 vs baseline traj', size=(8,4), cutoff=500, labels = ['baseline', 'unpaired reinforcement'], colors=['grey', '#ff355e'], palette='husl')
+# b2_baseline_traj_individual(folder_path2, 'b2 vs baseline traj indiv', size=(8,4), cutoff=500, labels = ['baseline', 'unpaired reinforcement'], colors=['grey', '#ff355e'])
+# block_comparisons(folder_path2, 'block comps', size=(12,3), groups=6, labels = ['b1', 'b2'], colors=['grey', 'red'])
+b2_comparisons(folder_path3, 'b2 comps', size=(12,3), groups=6, labels = ['cc', 'ctrl'], colors=['#ff355e', '#7ed4e6'])
 
 
 # %% PAM>Chr Disappearing plume experiments
@@ -78,14 +89,18 @@ folder_path5 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2025_e
 # zigzag_training_traj(folder_path1, savename='training trajectories', size=(9,5))
 # # zigzag_reentry_traj(folder_path1, size=(5,5))
 # zigzag_return_efficiency(folder_path1, 'p1 vs p2c vs p2', size=(3,4), colors=['grey', '#fbceb1', '#ff355e']) #ff355e
-zigzag_return_efficiency_fc(folder_path1, 'p1 vs p2 re fc', size=(3,5), colors=['#fbceb1', '#ff355e'])
+# zigzag_return_velocity(folder_path1, 'p1 vs p2c vs p2 return velocity', size=(3,4), colors=['grey', '#fbceb1', '#ff355e']) #ff355e
+
+# zigzag_return_efficiency_fc(folder_path1, 'p1 vs p2 re fc', size=(3,5), colors=['#fbceb1', '#ff355e'])
 # zigzag_alt_return_efficiency(folder_path1, 'p1 vs p2 alt re', size=(5,5), colors=['grey', '#fbceb1', '#ff355e'])
 # zigzag_first_return_efficiency(folder_path5, 'RR vs RL re', size=(5,5), colors=['lightgrey', '#fbceb1', '#ff355e'])
 # # zigzag_entry_angles(folder_path2, 'p1 vs p2 entry angles all', size=(5,5), colors=['lightgrey',  '#ff355e'])
-# zigzag_entry_angle_strength(folder_path1, 'p1 vs p2 entry angle strength', size=(3,4), colors=['grey', '#ff355e'])
+zigzag_entry_angle_strength(folder_path1, 'p2c vs p2 entry angle strength', size=(3,5), colors=['#fbceb1', '#ff355e'])
 # zigzag_reentry_uws(folder_path1, savename='reentry uws', size=(5,4), colors=['#fbceb1', '#ff355e'], sample_rate=20, buf_pts=5)
 # zigzag_alt_return_efficiency_paired(folder_path2, 'paired re p1 vs p2', size=(3,5), colors=['grey', '#ff355e'])
 
+zigzag_speed_vs_heading_diff(folder_path1, 'p2 vs p1 exp curves', size=(4,4), grp='exp', colors=['lightgrey', '#ff355e'],bin_width_deg=15, speed_pct=10)
+# zigzag_speed_vs_heading(folder_path1, 'p2 vs p1 ctrl heading only curves', size=(4,4), grp='ctrl', colors=['lightgrey', '#fbceb1'],bin_width_deg=15, speed_pct=10)
 
 # %% Proper controls PAM>Chr oct pulse training --> oct plume
 folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2025_exp/MAIN/oct_CL_training'
@@ -111,8 +126,8 @@ training_plotter_bw(folder_path1, led='red', select_file=None, save=True)
 oct_training_return_efficiency(folder_path1, 'return efficiency L vs R', groups=2, multiodor=False, size=(3,5), labels=['L training', 'R training'], colors=['#77b5fe', '#7ed4e6'])
 # oct_training_pre_isi(folder_path1, 'pulse length L vs R', groups=2, multiodor=False, size=(3,5), bout='in', labels=['L training', 'R training'], colors=['#77b5fe', '#7ed4e6'])
 # oct_training_pre_isi(folder_path1, 'ISI L vs R', groups=2, multiodor=False, size=(3,5), bout='out', labels=['L training', 'R training'], colors=['#77b5fe', '#7ed4e6'])
-# operant_training_pre_angles(folder_path1, 'training entry angle L vs R', multiodor=False, angle='entry', size=(5,5), colors=['#77b5fe', '#7ed4e6'])
-# operant_training_pre_angles(folder_path1, 'training exit angle L vs R', multiodor=False, angle='exit', size=(5,5), colors=['#77b5fe', '#7ed4e6'])
+operant_training_pre_angles(folder_path1, 'training entry angle L vs R', multiodor=False, angle='entry', size=(5,5), colors=['#77b5fe', '#7ed4e6'])
+operant_training_pre_angles(folder_path1, 'training exit angle L vs R', multiodor=False, angle='exit', size=(5,5), colors=['#77b5fe', '#7ed4e6'])
 plume_onset_uws(folder_path2, 'uws at plume onset training vs ctrl', multiodor=False, size=(6,4), sample_rate=10, buf_pts=5, keywords = ['no training', 'L training', 'R training'], colors=['grey', '#77b5fe', '#7ed4e6'])
 avg_plume_onset_uws(folder_path2, 'avg uws at plume onset training vs ctrl', multiodor=False, size=(3,5), sample_rate=10, buf_pts=5, keywords = ['no training', 'L training', 'R training'], colors=['grey', '#77b5fe', '#7ed4e6'])
 oct_training_plume_onset_traj(folder_path2, savename='plume onset traj', multiodor=False, size=(15,5), time=True, keywords=['oct plume', 'L training - oct', 'R training - oct'], colors=['#7ed4e6', '#7ed4e6', '#7ed4e6'])
@@ -150,11 +165,11 @@ folder_path3 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2025_e
 # jumping_plotter_bw(folder_path1, stripwidth=50, led='green', select_file=None)
 
 # jumping_comparisons_tracking(folder_path2, 'FC2 tracking comparisons', size=(6,3), groups=3, keywords = ['ctrl', 'exp'], colors=['#0bdf51', '#0bdf51'])
-# jumping_comparisons(folder_path2, 'FC2 comparisons', size=(10,3), groups=5, keywords = ['ctrl', 'exp'], colors=['#0bdf51', '#0bdf51'])
+jumping_comparisons(folder_path2, 'FC2 comparisons', size=(12,3), groups=6, keywords = ['ctrl', 'exp'], colors=['#0bdf51', '#0bdf51'])
 # jumping_entry_angles(folder_path2, 'FC2 entry angles', size=(4, 4), colors=['black', '#0bdf51'])
 
-jumping_comparisons_tracking(folder_path3, 'w1118 tracking comparisons', size=(6,3), groups=3, keywords = ['ctrl', 'exp'], colors=['grey', 'grey'])
-jumping_comparisons(folder_path3, 'w1118 comparisons', size=(10,3), groups=5, keywords = ['ctrl', 'exp'], colors=['grey', 'grey'])
+# jumping_comparisons_tracking(folder_path3, 'w1118 tracking comparisons', size=(6,3), groups=3, keywords = ['ctrl', 'exp'], colors=['grey', 'grey'])
+# jumping_comparisons(folder_path3, 'w1118 comparisons', size=(12,3), groups=6, keywords = ['ctrl', 'exp'], colors=['grey', 'grey'])
 # jumping_entry_angles(folder_path3, 'w1118 entry angles', size=(4, 4), colors=['black', '#89cff0'])
 
 
@@ -162,20 +177,22 @@ jumping_comparisons(folder_path3, 'w1118 comparisons', size=(10,3), groups=5, ke
 # jumping_paired_plotter(folder_path3, led="green", stripwidth=50)
 
 # %% Orco paper analyses
-folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2024_exp/MAIN/Orco_light_strip/wind'
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2024_exp/MAIN/Orco_light_strip'
 folder_path_comp = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2024_exp/ANALYSIS/orco_vs_acv'
 
-# ET_comparisons(folder_path, 'orco et comps', size=(10,3), groups=5, colors=['#6acff6', 'red'])
-orco_acv_comparisons(folder_path_comp, 'acv vs orco time inside', size=(3,4), colors=['#fbceb1', '#ff355e'])
+# ET_comparisons(folder_path, 'orco et comps', size=(10,3), groups=6, colors=['#6acff6', 'red'])
+# orco_acv_comparisons(folder_path_comp, 'acv vs orco time outside', size=(3,4), colors=['#fbceb1', '#ff355e'])
+# orco_acv_ET_comparisons(folder_path_comp, 'acv vs orco inside+outside comps', size=(10,6), colors=['#fbceb1', '#ff355e'])
+# orco_lightstrip_ypos_comparison(folder_path, 'wind vs no wind avg ypos', size=(3,4), keyword='NW', colors=['black', '#6acff6'])
 
 # %% Chad paper analyses
-folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2025_exp/ANALYSIS/CM_disappearing_vertical'
+folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2025_exp/ANALYSIS/CM_disappearing_vert'
 folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2025_exp/ANALYSIS/CM_disappearing_45'
 folder_path3 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2025_exp/ANALYSIS/CM_disappearing_90'
 
-# CM_disappearing_memory(folder_path1, 'vertical',  color='red', size=(8,4))
-CM_disappearing_memory(folder_path2, '45',  color='red', size=(8,4))
-CM_disappearing_memory(folder_path3, '90',  color='red', size=(8,4))
+CM_disappearing_memory(folder_path1, 'vertical',  color='red', size=(12,3))
+CM_disappearing_memory(folder_path2, '45',  color='red', size=(12,3))
+# CM_disappearing_memory(folder_path3, '90',  color='red', size=(8,4))
 
 # trajectory_plotter_bw(folder_path, 50, 100000, -100, [-500, 500], [0,2000], led='none', hlines=None, select_file= None, plot_type='odor', save=True)
 
@@ -188,8 +205,12 @@ select_file = '08182025-103758_CS_acv_plume_Fly6.log'
 # gaussian_plotter(folder_path, 160, 1500, 0, [-750, 750], [0,1500], select_file=select_file)
 # trajectory_plotter(folder_path_ctrl, 50, 1000, 0, [-500, 500], [0,1000], led='none', hlines=None, select_file=select_file, plot_type='odor', baseline=False, save=True)
 
-xpos_dist(folder_path_comp, 'xpos dist gaussian', (3,4))
-# gaussian_comparisons(folder_path_comp, 'sharp vs gaussian imposed inside', size=(8,3), groups=4, side ='inside', impose_edge=True, keywords = ['sharp', 'graded'], colors=['red', 'red'])
+# xpos_dist(folder_path_comp, 'xpos dist gaussian', (3,4))
+gaussian_comparisons(folder_path_comp, 'sharp vs gaussian true inside', size=(8,3), groups=4, side ='inside', impose_edge=False, keywords = ['sharp', 'graded'], colors=['grey', 'grey'])
+gaussian_comparisons(folder_path_comp, 'sharp vs gaussian true outside', size=(8,3), groups=4, side ='outside', impose_edge=False, keywords = ['sharp', 'graded'], colors=['grey', 'grey'])
+gaussian_comparisons(folder_path_comp, 'sharp vs gaussian imposed inside', size=(8,3), groups=4, side ='inside', impose_edge=True, keywords = ['sharp', 'graded'], colors=['red', 'red'])
+gaussian_comparisons(folder_path_comp, 'sharp vs gaussian imposed outside', size=(8,3), groups=4, side ='outside', impose_edge=True, keywords = ['sharp', 'graded'], colors=['red', 'red'])
+
 # gaussian_vel_hist(folder_path, 'speed hist', size=(3,4), bin_width=5)
 # gaussian_vel_hist(folder_path_ctrl, 'speed hist', size=(3,4), bin_width=5)
 
@@ -197,13 +218,22 @@ xpos_dist(folder_path_comp, 'xpos dist gaussian', (3,4))
 # %% PAM>Chr oct dir training   
 folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_dir_training'
 folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_dir_training/AA'
+folder_path3 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_dir_training/all'
+folder_path4 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/ANALYSIS/oct_training_BA_OM'
 
 # dir_training_plotter(folder_path, led='red', select_file=None)
 # dir_training_plotter_paired(folder_path, led='red', select_file=None)
+# pulse_onset_uws(folder_path, '1st entry heading -5-10 ctrl', multiodor=False, size=(5,4), sample_rate=35, pre=5, post=10, colors=['white', '#ff355e'])
 
 # dir_training_bias_paired(folder_path, 'paired biases from xf', size=(3,5), avgcolor='#7ed4e6')
+# dir_training_bias_paired_polar(folder_path, 'LL test bias', cond='test', size=(4,4), avgcolor='#7ed4e6')
 # dir_training_bias_paired_ctrl(folder_path, 'paired biases ctrl', size=(3,5), colors=['lightgrey', '#7ed4e6'])
 # dir_training_return_efficiency(folder_path, 'return efficiency', groups=['AA', 'BA'], size=(3,5), colors=['lightgrey', '#7ed4e6'])
+# dir_training_return_eff_comp(folder_path3, 'return efficiency NT v OL v BA v AA', groups=['no train', 'OL', 'BA', 'AA'], size=(4,4), colors=['lightgrey', 'grey', '#7ed4e6','#77b5fe'])
+# dir_training_prog_comp(folder_path3, 'prog NT v OL v BA v AA', groups=['no train', 'OL', 'BA', 'AA'], size=(4,4), colors=['lightgrey', 'grey', '#7ed4e6','#77b5fe'])
+dir_training_avg_plume_onset_uws(folder_path3, 'avg onset uws 3s ol ctrls incl', size=(4,4), baseline_subtract=False, sample_rate=30, pre=0, post=3, keywords=['no training', 'OL training', 'BA', 'AA'], colors=['lightgrey', 'grey', '#7ed4e6', '#77b5fe'])
+# dir_training_progression(folder_path, 'progression along plume axis', groups=['AA', 'BA'], size=(3,5), colors=['lightgrey', '#7ed4e6'])
+
 # dir_training_return_efficiency_ctrl(folder_path, 'training return eff uw edge exp vs ctrl', size=(3,5), colors=['lightgrey', '#ff355e'])
 # dir_training_plume_onset_traj(folder_path, 'onset trajectories all', size=(8,4), time=True, keywords=['L training', 'R training'], colors=['#77b5fe', '#7ed4e6'])
 # dir_training_plume_onset_first10_traj(folder_path, 'first 120s w ctrls', size=(5,5), delay=15, colors=['lightgrey', '#7ed4e6'])
@@ -213,12 +243,15 @@ folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp
 # dir_training_p1_heading_dist(folder_path, 'exp odor heading', size=(5,3), colors=['#7ed4e6', '#ff355e'])
 # dir_training_plume_training_traj(folder_path, 'overlaid training first entries+exits', size=(8,4), colors=['#7ed4e6', '#ff355e'])
 # dir_training_avg_plume_onset_uws(folder_path, 'avg onset uws 5s', size=(3,5), sample_rate=20, buf_pts=5, keywords=['no training', 'AA', 'BA'], colors=['lightgrey', '#77b5fe', '#7ed4e6'])
+
 # dir_training_plume_onset_uws(folder_path, 'plume onset uws 5s', multiodor=False, size=(7,5), sample_rate=20, buf_pts=5, keywords=['no training', 'AA', 'BA'], colors=['lightgrey', '#77b5fe', '#7ed4e6'])
-# dir_training_entry_angles(folder_path, 'ctrl training entry+exit angles', size=(4,4), colors=['#7ed4e6', 'lightgrey'])
+# dir_training_entry_angles(folder_path, 'RL training entry angles', size=(4,4), colors=['#7ed4e6', 'lightgrey'])
 # dir_training_stats(folder_path, 'training stats bout avgs', size=(13.5,4), colors=['#7ed4e6', '#ff355e'])
-dir_training_progression_cor(folder_path, 'AA exp train time vs test dist', size=(3,3), colors=['lightgrey', '#77b5fe'])
+# dir_training_progression_cor(folder_path, 'AA exp train time vs test dist', size=(3,3), colors=['lightgrey', '#77b5fe'])
 # dir_test_stats(folder_path, 'AA train+test stats', size=(6,6), colors=['lightgrey', '#7ed4e6'])
 # oct_led_comparisons(folder_path2, 'led on vs off bout comparisons', size=(6,5), colors=['grey', '#ff355e'])
+# dir_training_bias_change_odor_vs_dir(folder_path4, 'BA v OM', size=(3,4), colors = ['#7ed4e6', '#d473d4'])
+# dir_training_bias_change_BA_vs_AA(folder_path, 'BA v AA', size=(3,4), colors = ['#7ed4e6', '#77b5fe'])
 
 #%% MCH dir training
 folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_mch_dir_training'
@@ -243,11 +276,11 @@ folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp
 # dir_training_heading_dist(folder_path, 'heading distribution hist', size=(5,3), ctrl=False, colors=['lightgrey', '#7ed4e6'])
 
 # dir_training_plume_training_traj(folder_path2, 'overlaid training entries+exits PAM vs MBON21', size=(8,4), colors=['#ff355e', '#0bdf51'])
-# dir_training_avg_plume_onset_uws(folder_path, 'avg onset uws 5s', size=(3,5), sample_rate=20, buf_pts=5, keywords=['no training', 'AA', 'BA'], colors=['lightgrey', '#77b5fe', '#7ed4e6'])
+dir_training_avg_plume_onset_uws(folder_path, 'avg onset uws 5s', size=(3,5), sample_rate=0, buf_pts=5, keywords=['no training', 'AA', 'BA'], colors=['lightgrey', '#77b5fe', '#7ed4e6'])
 # dir_training_plume_onset_uws(folder_path, 'plume onset uws 5s', multiodor=False, size=(7,5), sample_rate=20, buf_pts=5, keywords=['no training', 'AA', 'BA'], colors=['lightgrey', '#77b5fe', '#7ed4e6'])
-# dir_training_entry_angles(folder_path, 'ctrl training entry+exit angles', size=(4,4), colors=['#7ed4e6', 'lightgrey'])
-# dir_training_stats(folder_path, 'training stats bout avgs', size=(13.5,4), colors=['#7ed4e6', '#ff355e'])
-dir_training_progression_cor(folder_path, 'AA expstrength vs prog', size=(3,3), colors=['lightgrey', '#77b5fe'])
+dir_training_entry_angles(folder_path, 'training entry+exit angles', size=(4,4), colors=['#7ed4e6', 'lightgrey'])
+dir_training_stats(folder_path, 'training stats bout avgs', size=(13.5,4), colors=['#7ed4e6', '#ff355e'])
+# dir_training_progression_cor(folder_path, 'AA expstrength vs prog', size=(3,3), colors=['lightgrey', '#77b5fe'])
 # dir_test_stats(folder_path, 'AA train+test stats', size=(6,6), colors=['lightgrey', '#7ed4e6'])
 # oct_led_comparisons(folder_path2, 'led on vs off bout comparisons', size=(6,5), colors=['grey', '#ff355e'])
 # dir_training_p1_heading_dist(folder_path, 'exp odor heading', size=(5,3), colors=['#7ed4e6', '#0bdf51'])
@@ -261,7 +294,116 @@ dual_odor_training_plotter(folder_path, led='red', select_file=None)
 
 
 # %% PAM oct mch dir training
-folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_mch_dir_training'
+folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_mch_dir_training'
+folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_mch_dir_training/ctrls'
+folder_path3 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_mch_dir_training/all'
+folder_path4 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/ANALYSIS/oct_mch_dir_training'
 
-dir_training_plotter(folder_path, led='red', select_file=None)
+# dir_training_plotter(folder_path1, led='red', select_file=None)
+# dir_training_plotter(folder_path2, led='red', select_file=None)
+# dir_training_plotter(folder_path3, led='red', select_file=None)
+# dir_training_return_efficiency(folder_path3, 'return efficiency', groups=['oct', 'mch'], size=(3,5), colors=['#7ed4e6', '#d473d4'])
+# dir_training_progression(folder_path3, 'progression along plume axis', groups=['oct', 'mch'], size=(3,5), colors=['lightgrey', '#d473d4'])
+dir_training_avg_plume_onset_uws_paired(folder_path3, 'avg onset uws 5s', size=(3,5), baseline_subtract=False, sample_rate=30, pre=0, post=3, keywords=['oct', 'mch'], colors=['lightgrey', '#d473d4'])
+# dir_training_bias_paired_polar(folder_path1, 'R test bias', cond='test', size=(4,4), avgcolor='#d473d4')
+# dir_training_entry_angles(folder_path1, 'L training entry angles', size=(4,4), colors=['#d473d4', 'lightgrey'])
+# unpaired_comparisons(folder_path4,'oct mch et comps',size=(12,3),groups=6,labels=['oct','mch'],colors=('#7ed4e6', '#d473d4'))
+dir_training_avg_plume_onset_uws(folder_path4, 'avg onset uws 3s', size=(3,5), baseline_subtract=False, sample_rate=30, pre=0, post=3, keywords=['no training', 'OL training', 'BA', 'AA'], colors=['lightgrey', 'grey', '#7ed4e6', '#d473d4'])
+
+
+# %%
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/PAM_Chr_oct_dir_training_erase'
+
+dir_training_plotter(folder_path1, led='red', select_file=None)
+
+# %%
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2025_exp/MAIN/dual_odor_training_AA'
+
+two_odor_training_plotter(folder_path, led='red', select_file=None)
+
+# %% PAM>GtACR
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2026_exp/MAIN/PAM_GtACR'
+
+silencing_comparisons(folder_path, 'silencing comparisons diff ea', size=(14,3), groups=7, keyword='light', colors=['black', '#0bdf51'])
+silencing_inout_comparisons(folder_path, 'silencing comparisons inside', size=(8,3), groups=4, side ='inside', colors=['black', '#0bdf51'])
+paired_plotter(folder_path, led='green', strip_width=50, strip_length=1100, plume_start=-100)
+average_trajectories(folder_path, savename='avg trajectories', size=(3,5), groups=['ctrl', 'exp'], colors=['black', '#0bdf51'])
+silencing_re_scatter(folder_path, 're vs dist', size=(5,5), colors=['white', '#0bdf51'])
+xdist_dist(folder_path, 'xdist dist', size=(5,5), colors=['black', '#0bdf51'])
+yprog_time(folder_path, 'yprog bw',  size=(5,3), colors=['white', '#0bdf51'])
+
+
+# %% PAM>GtACR transient silencing
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2026_exp/MAIN/PAM_GtACR_transient'
+
+silencing_comparisons(folder_path, 'silencing comparisons white', size=(14,3), groups=7, keyword='light', colors=['black', '#0bdf51'])
+silencing_inout_comparisons(folder_path, 'silencing comparisons inside bw', size=(8,3), groups=4, side ='inside', colors=['black', '#0bdf51'])
+silencing_inout_comparisons(folder_path, 'silencing comparisons outside bw', size=(8,3), groups=4, side ='outside', colors=['black', '#0bdf51'])
+paired_plotter(folder_path, led='green', strip_width=50, strip_length=1100, plume_start=-100)
+average_trajectories(folder_path, savename='avg trajectories bw', size=(3,5), groups=['ctrl', 'exp'], colors=['white', '#0bdf51'])
+silencing_re_scatter(folder_path, 're vs dist', size=(5,5), colors=['white', '#0bdf51'])
+xdist_dist(folder_path, 'xdist dist', size=(5,5), colors=['black', '#0bdf51'])
+yprog_time(folder_path, 'yprog bw',  size=(5,3), colors=['white', '#0bdf51'])
+speed_vs_heading_diff(folder_path, 'speed vs heading diff', size=(5, 4), colors=['black', '#0bdf51'],bin_width_deg=15, speed_pct=10)
+
+# %% PAM>Chr open loop training
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2026_exp/MAIN/PAM_Chr_OL_training'
+# training_plotter_bw(folder_path, led='red', select_file=None, save=True)
+OL_training_angles(folder_path, 'entry angles', size=(5,5), colors=['#ff355e', 'lightgrey'])
+dir_training_bias_paired_polar(folder_path, 'net travel vectors', cond='net', size=(4,4), avgcolor='#7ed4e6')
+dir_training_bias_paired_polar(folder_path, 'pulse pre bias', cond='baseline', size=(4,4), avgcolor='#7ed4e6')
+
+
+# %% PAM>Chr single open loop training + brief activation
+folder_path1 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2026_exp/MAIN/PAM_Chr_OL_1p_training'
+folder_path2 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2026_exp/MAIN/PAM_Chr_OL_1p_training_brief'
+folder_path3 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2026_exp/ANALYSIS/new_comps'
+folder_path4 = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2026_exp/ANALYSIS/all_5.5spulse'
+
+# training_1p_plotter_bw(folder_path1, led='red', select_file=None, save=True)
+# training_1p_plotter_bw(folder_path2, led='red', select_file=None, save=True)
+dir_training_avg_plume_onset_uws(folder_path3, 'avg onset uws change 5s ol ctrls incl', size=(4,4), sample_rate=35, baseline_subtract=True, pre=5, post=5, keywords=['no training', '1 pulse', 'BA', 'AA'], colors=['lightgrey', 'grey', '#7ed4e6', '#77b5fe'])
+# pulse_onset_uws(folder_path2, '1st entry heading -5-10', multiodor=False, size=(5,4), sample_rate=35, pre=5, post=10, colors=['white', '#ff355e'])
+
+# %%
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2026_exp/MAIN/PAM_Chr_training_brief'
+# trajectory_plotter_45_bw(folder_path, led='red', select_file=None, save=True)
+pulse_onset_uws(folder_path, '1st entry heading -5-10', multiodor=False, size=(5,4), sample_rate=35, pre=5, post=10, colors=['white', '#ff355e'])
+
+
+# %%
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/summer_2026_exp/MAIN/MBON07_Chr_oct_dir_training'
+# dir_training_plotter(folder_path, led='red', select_file=None)
+
+
+# %% MBON>Chr
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/MAIN/FB4R_GtACR_oct'
+
+# opto_comparisons_unpaired(folder_path, 'activation comps', size=(14,3), groups=7, keyword='light', colors=['#7ed4e6', '#ff355e'])
+opto_uws_trace(folder_path, 'uws trace', size=(5,4), sample_rate=35, pre=2, post=2, keywords=['ctrl', 'exp'], colors=['#7ed4e6', '#ff355e'])
+
+# silencing_inout_comparisons(folder_path, 'silencing comparisons inside', size=(8,3), groups=4, side ='inside', colors=['black', '#0bdf51'])
+# paired_plotter(folder_path, led='green', strip_width=50, strip_length=1100, plume_start=-100)
+# average_trajectories(folder_path, savename='avg trajectories', size=(3,5), groups=['ctrl', 'exp'], colors=['black', '#0bdf51'])
+# silencing_re_scatter(folder_path, 're vs dist', size=(5,5), colors=['white', '#0bdf51'])
+# xdist_dist(folder_path, 'xdist dist', size=(5,5), colors=['black', '#0bdf51'])
+# yprog_time(folder_path, 'yprog bw',  size=(5,3), colors=['white', '#0bdf51'])
+
+
+# %% PAM silencing Andy
+
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/spring_2024_exp/analysis/PAM_GtACR_AS'
+
+# silencing_return_efficiency(folder_path, 're comps', size=(4,4), colors=['#0bdf51', '#7ed4e6'])
+silencing_withinfly_comparisons(folder_path, 'silencing comps', size=(4, 3), colors=['white', '#0bdf51'])
+# silencing_re_vs_entries(folder_path, 're fc vs entries off', size=(4,4), colors=['#0bdf51', '#7ed4e6'])
+
+# %% ML delayed silencing
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/ML/PAM_GtACR_delayed_silencing'
+
+paired_plotter(folder_path, led='green', strip_width=50, strip_length=1100, plume_start=-100)
+
+# %% FB4R oct 45
+folder_path = '/Users/noelleeghbali/Desktop/exp/tethered_behavior/fall_2026_exp/MAIN/FB4R_GtACR_oct_45'
+trajectory_plotter_45_bw(folder_path, led='green',  select_file=None, save=True)
 # %%
